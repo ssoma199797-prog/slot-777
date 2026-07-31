@@ -1,0 +1,17 @@
+# Render Blueprint - deploys the app on the free plan (no credit card required).
+services:
+  - type: web
+    name: slot-rng
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
