@@ -1,3 +1,4 @@
+# Render Blueprint - deploys the app on the free plan (no credit card required).
 services:
   - type: web
     name: slot-rng

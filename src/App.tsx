@@ -200,12 +200,12 @@ export default function App() {
   // Generate or retrieve persistent browser device ID
   const deviceId = useMemo(() => {
     try {
-      // localStorage (not sessionStorage) so closing the tab or reloading keeps the
-      // same identity — the server then hands back the same player slot on re-entry.
-      let id = localStorage.getItem('slot_device_id') || sessionStorage.getItem('slot_device_id');
+      // MUST be sessionStorage: it is per-tab. localStorage is shared across every
+      // tab of the same browser, which made a second tab claim the first tab's slot.
+      let id = sessionStorage.getItem('slot_device_id');
       if (!id) {
         id = 'dev_' + Math.random().toString(36).substring(2, 9);
-        localStorage.setItem('slot_device_id', id);
+        sessionStorage.setItem('slot_device_id', id);
       }
       return id;
     } catch {
@@ -244,6 +244,7 @@ export default function App() {
   const startRemoteSpin = useCallback((data: any) => {
     if (data.targetValue !== undefined && data.targetValue !== null) {
       setRemoteStoppedReels(data.stoppedReels || [false, false, false]);
+      isInstantRef.current = !!data.isInstant;
       setIsInstant(data.isInstant || false);
       setActiveCutinVisible(false);
       setIsZoromeWinner(false);
@@ -267,6 +268,8 @@ export default function App() {
   const [isReconnecting, setIsReconnecting] = useState<boolean>(false);
   const [showReconnectToast, setShowReconnectToast] = useState<boolean>(false);
   const consecutiveFailuresRef = useRef<number>(0);
+  // Mirrors isInstant so the resolver can never act on a stale closure.
+  const isInstantRef = useRef<boolean>(false);
   // De-duplicates round results, which can arrive via both SSE and polling.
   const lastProcessedGameIndexRef = useRef<number>(0);
   const isDisconnectedRef = useRef<boolean>(false);
@@ -289,7 +292,6 @@ export default function App() {
 
       if (typeof roomData.currentSetIndex === 'number') setCurrentSetIndex(roomData.currentSetIndex);
       if (typeof roomData.currentRoundInSet === 'number') setCurrentRoundInSet(roomData.currentRoundInSet);
-      if (roomData.skillSelection && !isSpinningNow) setSkillSelection(roomData.skillSelection);
 
       // Sync active spin state if present from roomData
       if (roomData.activeSpin) {
@@ -565,7 +567,8 @@ export default function App() {
       if (data.success && data.roomData) {
         serverMatchState = data.roomData.matchState || null;
         if (Array.isArray(data.roomData.playerNames)) {
-          currentNames = data.roomData.playerNames.filter(Boolean);
+          // Do NOT compact: index i corresponds to slot i+1.
+          currentNames = [...data.roomData.playerNames];
         }
         if (data.roomData.connectedDevices) {
           devices = data.roomData.connectedDevices;
@@ -738,7 +741,6 @@ export default function App() {
           matchState: 'playing',
           currentRoundInSet: nextRound,
           currentSetIndex,
-          skillSelection: { minus20Count: 0, minus40Selected: false, minus5Selected: false },
         },
         { type: 'NEXT_ROUND', senderId: myPlayerId }
       );
@@ -780,7 +782,6 @@ export default function App() {
           matchState: 'playing',
           currentSetIndex: nextSetIdx,
           currentRoundInSet: 1,
-          skillSelection: { minus20Count: 0, minus40Selected: false, minus5Selected: false },
         },
         { type: 'NEXT_SET', senderId: myPlayerId }
       );
@@ -1079,6 +1080,7 @@ export default function App() {
       lastAppliedBonusRef.current = 0;
     }
 
+    isInstantRef.current = false;
     setIsInstant(false);
     setActiveCutinVisible(false);
     setIsZoromeWinner(false);
@@ -1183,6 +1185,7 @@ export default function App() {
       );
     }
 
+    isInstantRef.current = true;
     setIsInstant(true);
     setActiveCutinVisible(false);
     setIsZoromeWinner(false);
@@ -1369,7 +1372,7 @@ export default function App() {
 
     // Match Mode state update on spin resolve
     // 空回転 (⚡乱数調整) never produces a score, so the match state is left untouched.
-    if (!isInstant && activeView === 'match' && matchState === 'playing' && activeMatchPlayer) {
+    if (!isInstantRef.current && activeView === 'match' && matchState === 'playing' && activeMatchPlayer) {
       const bonusMinus = lastAppliedBonusRef.current;
       const rawVal = finalVal;
       // No floor: skills are allowed to push the score below zero, which is what
@@ -2313,7 +2316,7 @@ export default function App() {
         players={matchPlayers}
       />
 
-      {/* Set Summary Popup (3人が3周=1セットまわったら小計ポップアップ) */}
+      {/* Set Summary Popup (参加人数分の周が終わったら小計ポップアップ) */}
       <MatchStatsModal
         isOpen={isStatsOpen}
         onClose={() => setIsStatsOpen(false)}

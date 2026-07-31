@@ -404,9 +404,9 @@ async function startServer() {
       const deviceId = cleanString(reg.deviceId, 40);
       if (deviceId) {
         const devices = room.connectedDevices;
-        // Keep slots reserved for 3h so a player who closes the tab can rejoin
-        // and be handed back the same player number.
-        const cutoff = Date.now() - 3 * 60 * 60 * 1000;
+        // Short reservation: a player who leaves frees their slot within a few
+        // minutes, so returning players land back on the lowest free number.
+        const cutoff = Date.now() - 5 * 60 * 1000;
         for (const [k, v] of Object.entries(devices)) {
           if (v.updatedAt < cutoff) delete devices[k];
         }

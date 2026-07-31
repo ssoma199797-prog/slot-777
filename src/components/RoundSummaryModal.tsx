@@ -44,7 +44,7 @@ export default function RoundSummaryModal({
               第 {currentSetIndex} セット ➔ 【{currentRoundInSet} 周目】 完了小計
             </div>
             <h2 className="text-lg font-black text-yellow-300 mt-1 drop-shadow-md">
-              3人のスコア確定！ 1周目小計結果
+              {players.length}人のスコア確定！ {currentRoundInSet}周目の小計結果
             </h2>
             <p className="text-[11px] text-slate-400 mt-0.5 font-medium">
               （3人が各1ターン終了した時点のポイント変動）
@@ -144,7 +144,7 @@ export default function RoundSummaryModal({
               className="flex-1 py-3 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 text-slate-950 font-black text-xs sm:text-sm rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition cursor-pointer flex items-center justify-center gap-2"
             >
               <Play className="w-4 h-4 fill-slate-950" />
-              {currentRoundInSet < 3 ? `次の周 (${currentRoundInSet + 1}周目) へ進む` : 'セット結果ポップアップを表示'}
+              {currentRoundInSet < players.length ? `次の周 (${currentRoundInSet + 1}周目 / 全${players.length}周) へ進む` : 'セット結果ポップアップを表示'}
             </button>
 
             <button

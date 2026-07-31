@@ -45,13 +45,13 @@ export default function SetSummaryModal({
           <div className="text-center bg-gradient-to-r from-amber-950/90 via-slate-900 to-amber-950/90 p-3.5 rounded-2xl border border-amber-500/40">
             <div className="text-[10px] font-mono font-black text-amber-400 uppercase tracking-widest flex items-center justify-center gap-1.5">
               <Sparkles className="w-4 h-4 text-amber-300 animate-spin" />
-              第 {currentSetIndex} セット (全3周) 完了！
+              第 {currentSetIndex} セット (全{players.length}周) 完了！
             </div>
             <h2 className="text-xl font-black text-yellow-300 mt-1 drop-shadow-md">
-              ①セット（3周）終了！ 小計結果
+              第 {currentSetIndex} セット（全{players.length}周）終了！ 小計結果
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              （全員が3周プレイ完了した時点のセット総合順位）
+              （全員が全ての手番順を経験した時点のセット総合順位）
             </p>
           </div>
 
