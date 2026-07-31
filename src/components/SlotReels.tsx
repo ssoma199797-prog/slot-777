@@ -17,6 +17,8 @@ interface SlotReelsProps {
   isMatchMode?: boolean;
   onPassPlayer?: () => void;
   passConfirmPending?: boolean;
+  skillBonus?: number;
+  skillCutinText?: string | null;
   isMyTurn?: boolean;
   activePlayerScore?: number | null;
   hasConsumedPointsThisTurn?: boolean;
@@ -43,16 +45,23 @@ export default function SlotReels({
   isMatchMode = false,
   onPassPlayer,
   passConfirmPending = false,
+  skillBonus = 0,
+  skillCutinText = null,
   isMyTurn = true,
   activePlayerScore = null,
   hasConsumedPointsThisTurn = false,
   remoteStoppedReels,
 }: SlotReelsProps) {
   // Parse targetValue to digits e.g. 15 -> [0, 1, 5]
+  // Skills subtract with no floor, so a match score legitimately goes negative
+  // ("マイナス値で勝利"). Reel strips only carry 0-9, so they show the magnitude
+  // and the score panel carries the sign; without this the digits themselves went
+  // negative (-5 -> [-1, -1, -5]) and parked the strip on a blank position.
+  const reelValue = Math.abs(Math.trunc(targetValue)) % 1000;
   const digits = [
-    Math.floor(targetValue / 100) % 10,
-    Math.floor(targetValue / 10) % 10,
-    targetValue % 10,
+    Math.floor(reelValue / 100) % 10,
+    Math.floor(reelValue / 10) % 10,
+    reelValue % 10,
   ];
 
   // Reel states: 'idle' | 'spinning' | 'stopping' | 'stopped'
@@ -386,8 +395,26 @@ export default function SlotReels({
     <div className="flex flex-col items-center gap-4 relative" id="slot-reels-subsystem">
       {/* 3 Reels Stage */}
       <div className="grid grid-cols-3 gap-2.5 p-4 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 border-4 border-amber-500/40 rounded-3xl shadow-[0_12px_30px_rgba(0,0,0,0.8),inset_0_4px_12px_rgba(0,0,0,0.9)] max-w-sm w-full mx-auto relative decoration-clone">
+        {/* Persistent skill badge — small, out of the way, left of the reels */}
+        {skillBonus > 0 && (
+          <div className="absolute -top-3.5 left-1 z-30 px-2 py-0.5 rounded-lg border border-indigo-400/70 bg-indigo-950/95 text-indigo-100 font-black text-[10px] shadow-lg flex items-center gap-1">
+            <span className="text-indigo-300">SKILL</span>
+            <span className="text-amber-300">−{skillBonus}</span>
+            <span className="text-[7.5px] text-indigo-300/80">適用中</span>
+          </div>
+        )}
+
+        {/* Skill announcement cut-in */}
+        {skillCutinText && (
+          <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none">
+            <div className="px-5 py-2 rounded-2xl border-2 border-amber-300 bg-slate-950/90 shadow-[0_0_28px_rgba(251,191,36,0.85)] animate-pulse">
+              <span className="font-black text-lg text-amber-300 tracking-widest">{skillCutinText}</span>
+            </div>
+          </div>
+        )}
+
         {/* Top-Right "数値確定" button for Match Mode */}
-        {isMatchMode && onPassPlayer && (
+        {isMatchMode && onPassPlayer && isMyTurn && activePlayerScore !== null && (
           <button
             onClick={onPassPlayer}
             disabled={!isMyTurn || isSpinning || activePlayerScore === null}
@@ -557,7 +584,7 @@ export default function SlotReels({
           return (
             <button
               key={idx}
-              disabled={state !== 'spinning' || isInstant}
+              disabled={state !== 'spinning' || isInstant || (isMatchMode && !isMyTurn)}
               onClick={() => handleStopReel(idx)}
               className={`flex-1 flex flex-col items-center justify-center h-12 rounded-full font-sans font-bold text-center border-b-4 transition-all duration-75 relative stop-button-class ${
                 buttonGlows[idx] ? 'clicked-glow' : ''

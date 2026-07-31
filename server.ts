@@ -25,6 +25,10 @@ const MAX_NAME_LEN = 20;
 const MAX_ROOM_ID_LEN = 32;
 const RATE_LIMIT_WINDOW_MS = 10_000;
 const RATE_LIMIT_MAX_WRITES = 120;            // per IP per window
+// How long a player's slot survives without a write from that device. Connected
+// clients re-announce every SLOT_KEEPALIVE_MS (src/App.tsx), so this only
+// expires seats whose device has actually gone away.
+const SLOT_RESERVATION_MS = 5 * 60 * 1000;
 
 const ROOM_ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
 
@@ -250,6 +254,12 @@ function sanitizeBroadcast(ev: any): any | null {
         winnerId: clampInt(ev.winnerId, 0, MAX_PLAYERS, 0),
         record: sanitizeRecord(ev.record),
       };
+    case "SKILL_CUTIN":
+      return {
+        ...base,
+        skillText: cleanString(ev.skillText, 24),
+        skillBonus: clampInt(ev.skillBonus, 0, 999, 0),
+      };
     case "NEXT_ROUND":
     case "NEXT_SET":
     case "DISBAND":
@@ -406,7 +416,7 @@ async function startServer() {
         const devices = room.connectedDevices;
         // Short reservation: a player who leaves frees their slot within a few
         // minutes, so returning players land back on the lowest free number.
-        const cutoff = Date.now() - 5 * 60 * 1000;
+        const cutoff = Date.now() - SLOT_RESERVATION_MS;
         for (const [k, v] of Object.entries(devices)) {
           if (v.updatedAt < cutoff) delete devices[k];
         }
@@ -423,6 +433,20 @@ async function startServer() {
           slot,
           updatedAt: Date.now(),
         };
+      }
+    }
+
+    // The roster is rebuilt from the registered devices on every write, so a
+    // device owns its own name and nobody can clobber anyone else's. Slots with
+    // no device stay empty rather than becoming placeholder players.
+    {
+      const devs = Object.values(room.connectedDevices);
+      if (devs.length > 0) {
+        const maxSlot = Math.max(...devs.map((d) => d.slot));
+        const names: string[] = new Array(maxSlot).fill("");
+        for (const d of devs) names[d.slot - 1] = d.playerName;
+        room.playerNames = names;
+        room.playerCount = devs.length;
       }
     }
 

@@ -238,7 +238,15 @@ export const secureRandomInt = (min: number, max: number): number => {
   return lo + Math.floor(Math.random() * range);
 };
 
+/**
+ * Three matching reel digits (111, 222, …).
+ *
+ * Only an actual spin result can qualify. Scores fall to zero or below once
+ * skills are applied, and `String(0).padStart(3, '0')` is "000" — which used to
+ * award the zorome bonus to anyone whose score landed on exactly zero.
+ */
 export const isZoromeVal = (val: number): boolean => {
+  if (!Number.isFinite(val) || val < 1) return false;
   const s = String(val).padStart(3, '0');
   return s[0] === s[1] && s[1] === s[2];
 };

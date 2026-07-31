@@ -12,6 +12,24 @@ import SetSummaryModal from './components/SetSummaryModal';
 import MatchStatsModal from './components/MatchStatsModal';
 import { Settings, RefreshCw, BarChart2, Star, Volume2, VolumeX, Sparkles, HelpCircle, History, Trophy, Wifi, WifiOff } from 'lucide-react';
 
+// How often a device re-announces itself so the server keeps its slot reserved.
+// Must stay comfortably below SLOT_RESERVATION_MS in server.ts.
+const SLOT_KEEPALIVE_MS = 60_000;
+
+// Same shape the server accepts, so a hand-edited link cannot get us stuck on a
+// room id every write would be rejected for.
+const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
+
+/** Room id carried by a shared link (`?room=…`), when it is well formed. */
+function roomIdFromShareLink(): string | null {
+  try {
+    const value = new URLSearchParams(window.location.search).get('room');
+    return value && ROOM_ID_PATTERN.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
   const rainbowStars = useMemo(() => {
     return Array.from({ length: 30 }).map((_, i) => ({
@@ -185,13 +203,21 @@ export default function App() {
 
   const [roomId, setRoomId] = useState<string>('GLOBAL_LOBBY');
   const [myPlayerId, setMyPlayerId] = useState<number>(1);
-  const [joinMode, setJoinMode] = useState<'create' | 'join'>('create');
+  const [joinMode, setJoinMode] = useState<'create' | 'join'>(() => (roomIdFromShareLink() ? 'join' : 'create'));
   const [customRoomInput, setCustomRoomInput] = useState<string>(() => {
+    // Someone opening a shared link should land on that room, not on whatever
+    // room this browser used last.
+    const shared = roomIdFromShareLink();
+    if (shared) return shared;
     try { return localStorage.getItem('slot_last_room') || 'GLOBAL_LOBBY'; } catch { return 'GLOBAL_LOBBY'; }
   });
   const [userNameInput, setUserNameInput] = useState<string>(() => {
     try { return localStorage.getItem('slot_last_name') || 'おれ'; } catch { return 'おれ'; }
   });
+  // Mirrors the name field so the slot keepalive can read it without restarting
+  // its timer on every keystroke.
+  const userNameInputRef = useRef<string>(userNameInput);
+  userNameInputRef.current = userNameInput;
   const [remoteStoppedReels, setRemoteStoppedReels] = useState<boolean[]>([false, false, false]);
 
   const activeSpinRef = useRef<any>(null);
@@ -270,6 +296,13 @@ export default function App() {
   const consecutiveFailuresRef = useRef<number>(0);
   // Mirrors isInstant so the resolver can never act on a stale closure.
   const isInstantRef = useRef<boolean>(false);
+  // Skill announcement cut-in + the small always-on badge near the reels.
+  const [skillCutinText, setSkillCutinText] = useState<string | null>(null);
+  const [displaySkillBonus, setDisplaySkillBonus] = useState<number>(0);
+  const skillCutinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // applyReelStop is defined later in the body; a ref keeps applyRoomState stable.
+  const applyReelStopRef = useRef<(reelIdx: number, isRemote: boolean) => void>(() => {});
+  const handleSkillAnnounceRef = useRef<(t: string | null, b: number, r?: boolean) => void>(() => {});
   // De-duplicates round results, which can arrive via both SSE and polling.
   const lastProcessedGameIndexRef = useRef<number>(0);
   const isDisconnectedRef = useRef<boolean>(false);
@@ -326,17 +359,17 @@ export default function App() {
         }
       } else if (broadcastEvent.type === 'STOP_REEL') {
         const reelIdx = broadcastEvent.reelIdx;
-        if (typeof reelIdx === 'number') {
-          setRemoteStoppedReels((prev) => {
-            const next = [...prev];
-            next[reelIdx] = true;
-            return next;
-          });
+        if (typeof reelIdx === 'number' && broadcastEvent.senderId !== myPlayerId) {
+          applyReelStopRef.current(reelIdx, true);
         }
       } else if (broadcastEvent.type === 'EXECUTE_REWRITE' && broadcastEvent.senderId !== myPlayerId) {
         handleExecuteRewrite(false, true);
       } else if (broadcastEvent.type === 'SEND_STAMP' && broadcastEvent.senderId !== myPlayerId) {
         handleSendStamp(broadcastEvent.stampText, broadcastEvent.senderName, true);
+      } else if (broadcastEvent.type === 'SKILL_CUTIN') {
+        if (broadcastEvent.senderId !== myPlayerId) {
+          handleSkillAnnounceRef.current(broadcastEvent.skillText || null, broadcastEvent.skillBonus || 0, true);
+        }
       } else if (broadcastEvent.type === 'ROUND_RESULT') {
         const record = broadcastEvent.record;
         if (record && typeof record.gameIndex === 'number' && record.gameIndex !== lastProcessedGameIndexRef.current) {
@@ -511,6 +544,43 @@ export default function App() {
     };
   }, [roomId]);
 
+  // Keep this device's seat reserved.
+  // The server frees a slot that has gone quiet, and it only counts writes — but
+  // simply waiting for your turn produces no writes. A player who sat out one
+  // long turn therefore lost their seat, and on their next action came back
+  // under a different player number (taking over somebody else's turn).
+  useEffect(() => {
+    if (!roomId) return;
+
+    const sendKeepalive = () => {
+      if (activeViewRef.current !== 'match') return;
+      fetch('/api/sync/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomId,
+          deviceRegistration: {
+            deviceId,
+            playerName: userNameInputRef.current.trim() || 'プレイヤー',
+          },
+        }),
+      }).catch(() => {});
+    };
+
+    sendKeepalive();
+    const timer = setInterval(sendKeepalive, SLOT_KEEPALIVE_MS);
+    // Mobile browsers freeze timers in the background; catch up on return.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') sendKeepalive();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [roomId, deviceId]);
+
   // Compute rotation order names for current round in set
   const turnOrderNames = useMemo(() => {
     if (matchPlayers.length === 0) return [];
@@ -583,25 +653,9 @@ export default function App() {
 
     // The roster is derived from devices that have actually joined, so an empty
     // room shows one row (you), not a fixed set of placeholder players.
-    const roster: string[] = [];
-    if (devices) {
-      for (const d of Object.values(devices) as Array<{ slot: number; playerName: string }>) {
-        if (d && d.slot >= 1) roster[d.slot - 1] = d.playerName || `プレイヤー${d.slot}`;
-      }
-    }
-    // Names already agreed in the room win over the device's own label.
-    currentNames.forEach((n, i) => { if (n && roster[i]) roster[i] = n; });
-    roster[assignedSlot - 1] = myName;
-
-    const compactNames: string[] = [];
-    for (let i = 0; i < roster.length; i++) {
-      if (roster[i]) compactNames[i] = roster[i];
-    }
-    currentNames = compactNames;
-
+    // The server owns the roster now (it rebuilds it from registered devices),
+    // so the client simply registers itself and uses whatever comes back.
     setMyPlayerId(assignedSlot);
-    setPlayerNames(currentNames);
-    setPlayerCount(Math.max(1, currentNames.filter(Boolean).length));
 
     // A match already in progress must not be dragged back to the lobby just
     // because somebody opened the URL. Join the running match instead.
@@ -610,28 +664,28 @@ export default function App() {
 
     if (matchAlreadyRunning) {
       setMatchState(serverMatchState as 'playing' | 'set_summary' | 'game_over');
-      syncRoomStateToServer({
-        roomId: targetRoom,
-        playerNames: currentNames,
-      });
+      syncRoomStateToServer({ roomId: targetRoom });
     } else {
       setMatchState('lobby');
-      syncRoomStateToServer({
-        roomId: targetRoom,
-        playerNames: currentNames,
-        playerCount: Math.max(1, currentNames.filter(Boolean).length),
-        matchState: 'lobby',
-      });
+      syncRoomStateToServer({ roomId: targetRoom, matchState: 'lobby' });
     }
   };
 
   const handleLaunchGameFromLobby = () => {
-    const validNames = playerNames.filter((n) => n && n.trim().length > 0);
-    const count = Math.max(1, validNames.length);
+    // `playerNames` is slot-indexed and may contain gaps (a device that dropped
+    // out frees its slot). The player id MUST stay equal to the slot number,
+    // because every device matches its own turn with `id === myPlayerId`.
+    // Renumbering 1..N here would hand a device somebody else's turn — or, for
+    // the highest slot, no turn at all.
+    const roster = playerNames
+      .map((name, i) => ({ name: (name || '').trim(), slot: i + 1 }))
+      .filter((entry) => entry.name.length > 0);
+    const validNames = roster.map((entry) => entry.name);
+    const count = Math.max(1, roster.length);
 
-    const initialPlayers: MatchPlayer[] = validNames.map((name, i) => ({
-      id: i + 1,
-      name: name.trim() || `プレイヤー${i + 1}`,
+    const initialPlayers: MatchPlayer[] = roster.map(({ name, slot }) => ({
+      id: slot,
+      name: name || `プレイヤー${slot}`,
       points: 5,
       rawScore: null,
       currentScore: null,
@@ -687,7 +741,10 @@ export default function App() {
     setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false });
   };
 
-  const handleDisbandRoom = (isRemoteCall = false) => {
+  const handleDisbandRoom = (arg?: unknown) => {
+    // Callers wire this straight to onClick, so `arg` may be a MouseEvent.
+    // Only an explicit boolean true means "replaying a remote disband".
+    const isRemoteCall = arg === true;
     if (!isRemoteCall && activeView === 'match') {
       syncRoomStateToServer(
         { matchPlayers: [], matchState: 'setup', currentSetIndex: 1, currentRoundInSet: 1 },
@@ -761,10 +818,14 @@ export default function App() {
       usedAll5Points: false,
       skillsActive: { minus5Active: false },
       spinCount: 0,
+      hasConsumedPointsThisTurn: false,
     }));
 
-    // Guard against `% 0` producing NaN if the roster is somehow empty.
-    const shift = resetList.length > 0 ? (nextSetIdx - 1) % resetList.length : 0;
+    // A new set restarts at the first round, and the displayed turn order
+    // (`turnOrderNames`) is derived from the round number alone. Shifting by the
+    // set number here would make every device show an order that does not match
+    // who actually plays first.
+    const shift = 0;
     setActivePlayerIndex(shift);
     setMatchPlayers(resetList);
 
@@ -953,6 +1014,7 @@ export default function App() {
 
   const requestPassPlayer = () => {
     if (activeView !== 'match' || matchState !== 'playing' || !activeMatchPlayer) return;
+    if (!isMyTurnInMatch) return;
     if (!passConfirmPending) {
       setPassConfirmPending(true);
       if (passConfirmTimerRef.current) clearTimeout(passConfirmTimerRef.current);
@@ -962,6 +1024,27 @@ export default function App() {
     if (passConfirmTimerRef.current) clearTimeout(passConfirmTimerRef.current);
     setPassConfirmPending(false);
     handlePassPlayer();
+  };
+
+  const handleSkillAnnounce = (text: string | null, bonus: number, isRemote = false) => {
+    setDisplaySkillBonus(bonus);
+    if (text) {
+      setSkillCutinText(text);
+      if (!isRemote) playCutinSound('under_100');
+      if (skillCutinTimerRef.current) clearTimeout(skillCutinTimerRef.current);
+      skillCutinTimerRef.current = setTimeout(() => setSkillCutinText(null), 1400);
+    } else {
+      if (skillCutinTimerRef.current) clearTimeout(skillCutinTimerRef.current);
+      setSkillCutinText(null);
+    }
+    if (!isRemote && activeViewRef.current === 'match') {
+      syncRoomStateToServer(null, {
+        type: 'SKILL_CUTIN',
+        senderId: myPlayerId,
+        skillText: text || '',
+        skillBonus: bonus,
+      });
+    }
   };
 
   const handlePassPlayer = () => {
@@ -1015,6 +1098,7 @@ export default function App() {
       if (matchState !== 'playing' || !activeMatchPlayer || activeMatchPlayer.hasPassed) {
         return;
       }
+      if (!isMyTurnInMatch) return;
 
       const totalReq = currentSkillCost + 1;
       if (activeMatchPlayer.points < totalReq) {
@@ -1046,6 +1130,7 @@ export default function App() {
       lastAppliedBonusRef.current = appliedBonus;
 
       setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false });
+      setDisplaySkillBonus(0);
 
       const spinId = Date.now();
       setRemoteStoppedReels([false, false, false]);
@@ -1150,6 +1235,7 @@ export default function App() {
       if (matchState !== 'playing' || !activeMatchPlayer || activeMatchPlayer.hasPassed) {
         return;
       }
+      if (!isMyTurnInMatch) return;
       // 空回転: costs nothing, applies no skill, and never becomes a score.
       lastAppliedBonusRef.current = 0;
       const instantPlayers = matchPlayers;
@@ -1225,9 +1311,12 @@ export default function App() {
   };
 
   // Callback on reel-stops to handle staggered cut-ins (stop_1, stop_2, stop_3)
-  const handleReelStop = (reelIdx: number) => {
-    if (isInstant) return;
-
+  /**
+   * Shared reel-stop logic. Spectating devices call this via the STOP_REEL
+   * broadcast so their screen mirrors the active player exactly — same reels,
+   * same staged cut-ins, same freeze, same zorome fanfare.
+   */
+  const applyReelStop = (reelIdx: number, isRemote: boolean) => {
     setRemoteStoppedReels((prev) => {
       if (prev[reelIdx]) return prev;
       const next = [...prev];
@@ -1235,9 +1324,8 @@ export default function App() {
       return next;
     });
 
-    // activeSpinRef is always current, so the broadcast is built from it rather than
-    // from inside a state updater (updaters must stay side-effect free).
-    if (activeView === 'match') {
+    // Only the acting device publishes; spectators just replay.
+    if (!isRemote && activeView === 'match') {
       const currentSpin = activeSpinRef.current;
       let updatedSpin = null;
       if (currentSpin) {
@@ -1284,6 +1372,16 @@ export default function App() {
     }
   };
 
+  applyReelStopRef.current = applyReelStop;
+  handleSkillAnnounceRef.current = handleSkillAnnounce;
+
+  const handleReelStop = (reelIdx: number) => {
+    if (isInstant) return;
+    // Only the player whose turn it is may stop the reels.
+    if (activeView === 'match' && !isMyTurnInMatch) return;
+    applyReelStop(reelIdx, false);
+  };
+
   // Callback once all reels lock in
   const handleAllStopped = () => {
     // Intercept with rewrite pending state if rewrite is triggered
@@ -1302,6 +1400,9 @@ export default function App() {
 
   // Execute the PUSH button rewrite action (triggered manually or auto after 3 seconds)
   const handleExecuteRewrite = (isAuto = false, isRemoteCall = false) => {
+    // A spectating device must not fire the rewrite; it only replays the
+    // EXECUTE_REWRITE broadcast sent by the active player.
+    if (!isRemoteCall && activeView === 'match' && !isMyTurnInMatch) return;
     if (!isRemoteCall && activeView === 'match') {
       syncRoomStateToServer(null, {
         type: 'EXECUTE_REWRITE',
@@ -1372,7 +1473,10 @@ export default function App() {
 
     // Match Mode state update on spin resolve
     // 空回転 (⚡乱数調整) never produces a score, so the match state is left untouched.
-    if (!isInstantRef.current && activeView === 'match' && matchState === 'playing' && activeMatchPlayer) {
+    // Spectating devices replay the same reels but must NOT score: their
+    // lastAppliedBonusRef belongs to their own last spin, so letting them write
+    // would push a score with the wrong skill subtraction and clobber the real one.
+    if (!isInstantRef.current && isMyTurnInMatch && activeView === 'match' && matchState === 'playing' && activeMatchPlayer) {
       const bonusMinus = lastAppliedBonusRef.current;
       const rawVal = finalVal;
       // No floor: skills are allowed to push the score below zero, which is what
@@ -1438,6 +1542,10 @@ export default function App() {
       if (allDone) {
         setTimeout(() => evaluateMatchAndFinish(updated), 100);
       }
+    } else if (activeView === 'match' && !isMyTurnInMatch) {
+      // While this screen was mirroring the spin it refused room updates, so the
+      // scores the acting device pushed mid-spin were dropped. Pull them now.
+      fetchRoomStateRef.current();
     }
   };
 
@@ -1735,6 +1843,7 @@ export default function App() {
                           currentTurnInSet={currentRoundInSet}
                           matchState={matchState}
                           skillSelection={skillSelection}
+                          onSkillAnnounce={handleSkillAnnounce}
                           setSkillSelection={setSkillSelection}
                           onStartMatch={handleEnterOnlineLobby}
                           onCreateRoom={handleEnterOnlineLobby}
@@ -1873,6 +1982,7 @@ export default function App() {
                           currentTurnInSet={currentRoundInSet}
                           matchState={matchState}
                           skillSelection={skillSelection}
+                          onSkillAnnounce={handleSkillAnnounce}
                           setSkillSelection={setSkillSelection}
                           onStartMatch={handleEnterOnlineLobby}
                           onCreateRoom={handleEnterOnlineLobby}
@@ -1912,9 +2022,12 @@ export default function App() {
                         isMatchMode={activeView === 'match'}
                         onPassPlayer={requestPassPlayer}
                         passConfirmPending={passConfirmPending}
+                        skillBonus={displaySkillBonus}
+                        skillCutinText={skillCutinText}
                         isMyTurn={isMyTurnInMatch}
                         activePlayerScore={activeMatchPlayer?.currentScore ?? null}
                         hasConsumedPointsThisTurn={activeMatchPlayer?.hasConsumedPointsThisTurn ?? false}
+                        remoteStoppedReels={activeView === 'match' ? remoteStoppedReels : undefined}
                       />
 
                       {/* Rewrite PUSH button overlay */}
@@ -2028,6 +2141,7 @@ export default function App() {
                           currentTurnInSet={currentRoundInSet}
                           matchState={matchState}
                           skillSelection={skillSelection}
+                          onSkillAnnounce={handleSkillAnnounce}
                           setSkillSelection={setSkillSelection}
                           onStartMatch={handleEnterOnlineLobby}
                           onCreateRoom={handleEnterOnlineLobby}

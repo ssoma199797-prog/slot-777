@@ -15,6 +15,7 @@ interface MatchPanelProps {
   matchState: 'setup' | 'lobby' | 'playing' | 'set_summary' | 'game_over';
   skillSelection: SkillSelection;
   setSkillSelection: React.Dispatch<React.SetStateAction<SkillSelection>>;
+  onSkillAnnounce?: (text: string | null, bonus: number) => void;
   onStartMatch: () => void;
   onCreateRoom?: () => void;
   onJoinRoom?: () => void;
@@ -71,6 +72,7 @@ export default function MatchPanel({
   matchState,
   skillSelection,
   setSkillSelection,
+  onSkillAnnounce,
   onStartMatch,
   onCreateRoom,
   onJoinRoom,
@@ -152,43 +154,37 @@ export default function MatchPanel({
   };
 
   // Helper to toggle Skill 1 (-20: 1pt cost, max 1 per spin)
+  const announce = (sel: SkillSelection, text: string | null) => {
+    const bonus =
+      sel.minus20Count * 20 +
+      (sel.minus40Selected ? 40 : 0) +
+      (sel.minus5Selected || activePlayer?.skillsActive.minus5Active ? 5 : 0);
+    onSkillAnnounce?.(text, bonus);
+  };
+
   const handleToggleMinus20 = () => {
     if (!isMyTurn || isSpinning || matchState !== 'playing' || !activePlayer) return;
-    setSkillSelection((prev) => {
-      let nextCount = prev.minus20Count > 0 ? 0 : 1; // 0 <-> 1 (1回のみ)
-      const minus5Cost = prev.minus5Selected ? 1 : 0;
-      const neededPoints = nextCount * 1 + minus5Cost + 1; // skill cost + lever 1pt
+    const prev = skillSelection;
+    let nextCount = prev.minus20Count > 0 ? 0 : 1; // 0 <-> 1 (取り消し可)
+    const minus5Cost = prev.minus5Selected ? 1 : 0;
+    if (nextCount > 0 && activePlayer.points < nextCount * 1 + minus5Cost + 1) nextCount = 0;
 
-      if (nextCount > 0 && activePlayer.points < neededPoints) {
-        nextCount = 0;
-      }
-
-      return {
-        ...prev,
-        minus20Count: nextCount,
-        minus40Selected: false,
-      };
-    });
+    const next = { ...prev, minus20Count: nextCount, minus40Selected: false };
+    setSkillSelection(next);
+    announce(next, nextCount > 0 ? '−20 セット' : null);
   };
 
   // Helper to toggle Skill 2 (-40: 3pt cost)
   const handleToggleMinus40 = () => {
     if (!isMyTurn || isSpinning || matchState !== 'playing' || !activePlayer) return;
-    setSkillSelection((prev) => {
-      const willSelect = !prev.minus40Selected;
-      const minus5Cost = prev.minus5Selected ? 1 : 0;
-      const neededPoints = (willSelect ? 3 : 0) + minus5Cost + 1;
+    const prev = skillSelection;
+    const willSelect = !prev.minus40Selected;
+    const minus5Cost = prev.minus5Selected ? 1 : 0;
+    if (willSelect && activePlayer.points < (willSelect ? 3 : 0) + minus5Cost + 1) return;
 
-      if (willSelect && activePlayer.points < neededPoints) {
-        return prev;
-      }
-
-      return {
-        ...prev,
-        minus40Selected: willSelect,
-        minus20Count: 0,
-      };
-    });
+    const next = { ...prev, minus40Selected: willSelect, minus20Count: 0 };
+    setSkillSelection(next);
+    announce(next, willSelect ? '−40 セット' : null);
   };
 
   // Helper to toggle Skill 3 (turn minus5: 1pt cost)
@@ -196,20 +192,14 @@ export default function MatchPanel({
     if (!isMyTurn || isSpinning || matchState !== 'playing' || !activePlayer) return;
     if (activePlayer.skillsActive.minus5Active) return;
 
-    setSkillSelection((prev) => {
-      const willSelect = !prev.minus5Selected;
-      const currentOtherSkillCost = prev.minus20Count * 1 + (prev.minus40Selected ? 3 : 0);
-      const neededPoints = currentOtherSkillCost + (willSelect ? 1 : 0) + 1;
+    const prev = skillSelection;
+    const willSelect = !prev.minus5Selected;
+    const otherCost = prev.minus20Count * 1 + (prev.minus40Selected ? 3 : 0);
+    if (willSelect && activePlayer.points < otherCost + (willSelect ? 1 : 0) + 1) return;
 
-      if (willSelect && activePlayer.points < neededPoints) {
-        return prev;
-      }
-
-      return {
-        ...prev,
-        minus5Selected: willSelect,
-      };
-    });
+    const next = { ...prev, minus5Selected: willSelect };
+    setSkillSelection(next);
+    announce(next, willSelect ? 'ターン中 −5 セット' : null);
   };
 
   const canAffordMinus20Step = (targetCount: number) => {
@@ -512,7 +502,16 @@ export default function MatchPanel({
       {showLower && matchState === 'playing' && activePlayer && (
         <div className="flex flex-col gap-1.5">
           {/* ALL-IN-ONE CONTROL CABINET (レバー・スキル・乱数調整・確定の一体化四角欄) */}
-          <div className="bg-slate-950 border-2 border-slate-800 rounded-2xl p-2 flex flex-col gap-1 shadow-xl my-0.5 relative overflow-hidden">
+          <div className={`bg-slate-950 border-2 rounded-2xl p-2 flex flex-col gap-1 shadow-xl my-0.5 relative overflow-hidden transition-all ${
+            isMyTurn ? 'border-slate-800' : 'border-slate-900 opacity-50 pointer-events-none select-none'
+          }`}>
+            {!isMyTurn && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/40">
+                <span className="text-[10px] font-mono font-bold text-rose-300 bg-slate-950/90 border border-rose-500/40 rounded-full px-3 py-1">
+                  観戦中 ・ 操作できません
+                </span>
+              </div>
+            )}
             {/* Panel Header & Simple Turn Order */}
             <div className="flex items-center justify-between text-[9px] font-mono border-b border-slate-900 pb-1 px-0.5 gap-1">
               {/* Simple Player Turn Sequence Order */}
