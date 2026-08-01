@@ -776,6 +776,69 @@ export default function App() {
     };
   }, [roomId, deviceId, hasJoinedRoom]);
 
+  // What the entry screen knows about the room it is pointed at, so "resume" can
+  // be offered only when there is actually something to resume.
+  const [roomProbe, setRoomProbe] = useState<{ matchState: string | null; names: string[] } | null>(null);
+  useEffect(() => {
+    if (activeView !== 'match' || matchState !== 'setup') return;
+    const target = customRoomInput.trim() || 'GLOBAL_LOBBY';
+    if (!ROOM_ID_PATTERN.test(target)) {
+      setRoomProbe(null);
+      return;
+    }
+    let cancelled = false;
+    const probe = async () => {
+      try {
+        const res = await fetch(`/api/sync/state/${encodeURIComponent(target)}`, { cache: 'no-store' });
+        const data = await res.json();
+        if (cancelled) return;
+        const room = data?.roomData;
+        setRoomProbe(
+          room
+            ? {
+                matchState: room.matchState ?? null,
+                names: Array.isArray(room.playerNames) ? room.playerNames.filter(Boolean) : [],
+              }
+            : { matchState: null, names: [] }
+        );
+      } catch {
+        if (!cancelled) setRoomProbe(null);
+      }
+    };
+    // Debounced so typing a room id does not fire a request per keystroke.
+    const timer = setTimeout(probe, 500);
+    const poll = setInterval(probe, 5000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      clearInterval(poll);
+    };
+  }, [activeView, matchState, customRoomInput]);
+
+  const sessionInProgress =
+    roomProbe?.matchState === 'playing' ||
+    roomProbe?.matchState === 'set_summary' ||
+    roomProbe?.matchState === 'game_over' ||
+    roomProbe?.matchState === 'lobby';
+
+  /** Wipe the room on the server without joining it first. */
+  const handleResetSession = async () => {
+    const target = customRoomInput.trim() || 'GLOBAL_LOBBY';
+    if (!ROOM_ID_PATTERN.test(target)) return;
+    try {
+      await fetch('/api/sync/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId: target, broadcastEvent: { type: 'DISBAND', senderId: myPlayerId } }),
+      });
+    } catch {
+      // the local reset below still runs
+    }
+    // `true` marks this as a replay so it does not broadcast a second DISBAND.
+    handleDisbandRoom(true);
+    setRoomProbe({ matchState: null, names: [] });
+  };
+
   // Compute rotation order names for current round in set
   const turnOrderNames = useMemo(() => {
     if (matchPlayers.length === 0) return [];
@@ -2238,6 +2301,9 @@ export default function App() {
                           onTriggerNormalSpin={triggerNormalSpin}
                           onTriggerInstantSpin={triggerInstantSpin}
                           onShowStats={() => setIsStatsOpen(true)}
+                          onResetSession={handleResetSession}
+                          sessionInProgress={sessionInProgress}
+                          sessionPlayerNames={roomProbe?.names ?? []}
                           canLaunchGame={canLaunchGame}
                           lobbyReadyCount={lobbyReadyCount}
                           lobbyTotalCount={lobbyTotalCount}
@@ -2381,6 +2447,9 @@ export default function App() {
                           onTriggerNormalSpin={triggerNormalSpin}
                           onTriggerInstantSpin={triggerInstantSpin}
                           onShowStats={() => setIsStatsOpen(true)}
+                          onResetSession={handleResetSession}
+                          sessionInProgress={sessionInProgress}
+                          sessionPlayerNames={roomProbe?.names ?? []}
                           canLaunchGame={canLaunchGame}
                           lobbyReadyCount={lobbyReadyCount}
                           lobbyTotalCount={lobbyTotalCount}
@@ -2559,6 +2628,9 @@ export default function App() {
                           onTriggerNormalSpin={triggerNormalSpin}
                           onTriggerInstantSpin={triggerInstantSpin}
                           onShowStats={() => setIsStatsOpen(true)}
+                          onResetSession={handleResetSession}
+                          sessionInProgress={sessionInProgress}
+                          sessionPlayerNames={roomProbe?.names ?? []}
                           canLaunchGame={canLaunchGame}
                           lobbyReadyCount={lobbyReadyCount}
                           lobbyTotalCount={lobbyTotalCount}

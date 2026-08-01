@@ -40,6 +40,9 @@ interface MatchPanelProps {
   onTriggerNormalSpin: () => void;
   onTriggerInstantSpin: () => void;
   onShowStats?: () => void;
+  onResetSession?: () => void;
+  sessionInProgress?: boolean;
+  sessionPlayerNames?: string[];
   canLaunchGame?: boolean;
   lobbyReadyCount?: number;
   lobbyTotalCount?: number;
@@ -99,6 +102,9 @@ export default function MatchPanel({
   onTriggerNormalSpin,
   onTriggerInstantSpin,
   onShowStats,
+  onResetSession,
+  sessionInProgress = false,
+  sessionPlayerNames = [],
   canLaunchGame = true,
   lobbyReadyCount = 0,
   lobbyTotalCount = 0,
@@ -115,6 +121,7 @@ export default function MatchPanel({
   setUserNameInput: propsSetUserNameInput,
 }: MatchPanelProps) {
   const [showRuleQuickSheet, setShowRuleQuickSheet] = useState(false);
+  const [resetPending, setResetPending] = useState(false);
   const [copiedRoomId, setCopiedRoomId] = useState(false);
   const [localJoinMode, setLocalJoinMode] = useState<'create' | 'join'>('create');
   const [localCustomRoom, setLocalCustomRoom] = useState<string>('ROOM-777');
@@ -343,12 +350,59 @@ export default function MatchPanel({
                   />
                 </div>
 
+                {/* What the room currently holds, so the choice below is informed */}
+                <div className="text-[10px] font-mono px-1 text-slate-400">
+                  {sessionInProgress ? (
+                    <span className="text-emerald-300">
+                      ● 開いているセッションがあります
+                      {sessionPlayerNames.length > 0 && `（${sessionPlayerNames.join('・')}）`}
+                    </span>
+                  ) : (
+                    <span>○ このルームは空いています</span>
+                  )}
+                </div>
+
                 <button
                   onClick={onStartMatch || onCreateRoom}
                   className="w-full py-3.5 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 text-slate-950 font-black text-xs rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition cursor-pointer flex items-center justify-center gap-2"
                 >
                   <Sparkles className="w-4 h-4 fill-slate-950" />
-                  <span>オンライン対戦待機室に入る</span>
+                  <span>入室する</span>
+                </button>
+
+                <button
+                  onClick={onStartMatch || onCreateRoom}
+                  disabled={!sessionInProgress}
+                  className={`w-full py-3 font-black text-xs rounded-xl transition flex items-center justify-center gap-2 border ${
+                    sessionInProgress
+                      ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-200 hover:bg-emerald-900 active:scale-95 cursor-pointer'
+                      : 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed'
+                  }`}
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  <span>開いているセッションに戻る</span>
+                </button>
+
+                <button
+                  // Two taps, in-app: this wipes everyone's session, so it must not
+                  // fire on a stray touch — and window.confirm is unreliable in an
+                  // installed PWA.
+                  onClick={() => {
+                    if (!resetPending) {
+                      setResetPending(true);
+                      return;
+                    }
+                    setResetPending(false);
+                    onResetSession?.();
+                  }}
+                  className={`w-full py-2.5 font-bold text-[11px] rounded-xl transition flex items-center justify-center gap-1.5 border ${
+                    resetPending
+                      ? 'bg-rose-500 border-rose-200 text-slate-950 animate-pulse cursor-pointer'
+                      : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-rose-300 hover:border-rose-500/50 cursor-pointer'
+                  }`}
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>{resetPending ? 'もう一度タップでリセット' : 'セッションをリセット'}</span>
                 </button>
               </div>
             </div>

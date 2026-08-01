@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { MatchPlayer, MatchGameRecord, MatchSetRecord } from '../types';
 import { aggregateAllSets, aggregateSession, rankSet, rankLabel, pointSeries } from '../utils/stats';
@@ -25,9 +25,25 @@ export default function MatchStatsModal({
   currentSetIndex,
   onDisbandRoom,
 }: MatchStatsModalProps) {
+  // Hooks stay above the isOpen guard — bailing out before them would change the
+  // hook count between renders.
+  // Arms on the first tap, commits on the second, and disarms itself.
+  const [endPending, setEndPending] = useState(false);
+  const endTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!endPending) return;
+    endTimerRef.current = setTimeout(() => setEndPending(false), 5000);
+    return () => {
+      if (endTimerRef.current) clearTimeout(endTimerRef.current);
+    };
+  }, [endPending]);
+  // A closed panel must not keep a half-armed exit waiting for it.
+  useEffect(() => {
+    if (!isOpen) setEndPending(false);
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
-  // Sort players by totalMatchPoints descending
   // Derived from the game log so it cannot disagree with the per-game records.
   const setAggregates = aggregateAllSets(gameHistory);
   // The session total is the sum of every set, so it is summed from the same log
@@ -280,15 +296,26 @@ export default function MatchStatsModal({
 
           {onDisbandRoom && (
             <button
+              // Two taps in the app instead of window.confirm(): the native dialog
+              // is unreliable inside an installed PWA, which is why this button
+              // sometimes appeared to do nothing at all.
               onClick={() => {
-                if (confirm('セッションを終了します。ここまでの集計は消えます。よろしいですか？')) {
-                  onDisbandRoom();
-                  onClose();
+                if (!endPending) {
+                  setEndPending(true);
+                  return;
                 }
+                setEndPending(false);
+                onDisbandRoom();
+                onClose();
               }}
-              className="px-4 py-2 bg-rose-950/80 hover:bg-rose-900 border border-rose-500/50 text-rose-300 text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5"
+              className={`px-4 py-2 border text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5 ${
+                endPending
+                  ? 'bg-rose-500 border-rose-200 text-slate-950 scale-105 shadow-[0_0_18px_rgba(244,63,94,0.7)] animate-pulse'
+                  : 'bg-rose-950/80 hover:bg-rose-900 border-rose-500/50 text-rose-300'
+              }`}
             >
-              <RefreshCw className="w-3.5 h-3.5" /> セッションを終了する
+              <RefreshCw className="w-3.5 h-3.5" />
+              {endPending ? 'もう一度タップで終了' : 'セッションを終了する'}
             </button>
           )}
         </div>
