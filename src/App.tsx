@@ -361,6 +361,13 @@ export default function App() {
   const handleExecuteRewriteRef = useRef<(isAuto?: boolean, isRemote?: boolean) => void>(() => {});
   const handleSendStampRef = useRef<(text: string, sender: string, isRemote?: boolean) => void>(() => {});
   const handleDisbandRoomRef = useRef<(arg?: unknown) => void>(() => {});
+  // Which round / set the summary popup on screen belongs to.
+  // The popups used to be dismissed only by the NEXT_ROUND / NEXT_SET message.
+  // A device that missed it (backgrounded, on another tab, a dropped frame) kept
+  // a stale popup, and its "next round" button then advanced everyone past a
+  // round that had already been played.
+  const summaryRoundRef = useRef<number>(0);
+  const summarySetRef = useRef<number>(0);
   // De-duplicates round results, which can arrive via both SSE and polling.
   const lastProcessedGameIndexRef = useRef<number>(0);
   const isDisconnectedRef = useRef<boolean>(false);
@@ -450,6 +457,30 @@ export default function App() {
       if (typeof roomData.currentSetIndex === 'number') setCurrentSetIndex(roomData.currentSetIndex);
       if (typeof roomData.currentRoundInSet === 'number') setCurrentRoundInSet(roomData.currentRoundInSet);
 
+      // Close a summary the room has already moved past. This is what makes
+      // coming back from another screen safe: the popup is dismissed by the state
+      // itself, so a device that missed the NEXT_ROUND message cannot press a
+      // button belonging to a round everybody else has already finished.
+      const roomRound = typeof roomData.currentRoundInSet === 'number' ? roomData.currentRoundInSet : null;
+      const roomSet = typeof roomData.currentSetIndex === 'number' ? roomData.currentSetIndex : null;
+      const roomMovedOn =
+        (roomSet !== null && summarySetRef.current > 0 && roomSet > summarySetRef.current) ||
+        (roomSet !== null && roomRound !== null &&
+          roomSet === summarySetRef.current && summaryRoundRef.current > 0 && roomRound > summaryRoundRef.current);
+      if (roomMovedOn) {
+        setIsRoundSummaryOpen(false);
+        setIsSetSummaryOpen(false);
+        setMatchWinner(null);
+        setIsMatchDraw(false);
+        summaryRoundRef.current = 0;
+        summarySetRef.current = 0;
+        resetSlotVisuals();
+      }
+      // A set summary only belongs on screen while the room says the set ended.
+      if (roomData.matchState === 'playing' && summarySetRef.current > 0 && roomSet !== null && roomSet > summarySetRef.current) {
+        setIsSetSummaryOpen(false);
+      }
+
       // Sync active spin state if present from roomData
       if (roomData.activeSpin) {
         const spin = roomData.activeSpin;
@@ -537,6 +568,8 @@ export default function App() {
             broadcastEvent.isDraw ? null : roster.find((p) => p.id === broadcastEvent.winnerId) || null
           );
 
+          summaryRoundRef.current = record.roundInSet || (roomData?.currentRoundInSet ?? 0);
+          summarySetRef.current = record.setIndex || (roomData?.currentSetIndex ?? 0);
           if (broadcastEvent.summary === 'set') {
             setIsRoundSummaryOpen(false);
             setIsSetSummaryOpen(true);
@@ -974,6 +1007,13 @@ export default function App() {
   };
 
   const handleNextRound = () => {
+    // Advance from the round this summary is actually for. If the room already
+    // moved on while this device was elsewhere, the round is not ours to advance.
+    if (summaryRoundRef.current > 0 && summaryRoundRef.current !== currentRoundInSet) {
+      setIsRoundSummaryOpen(false);
+      summaryRoundRef.current = 0;
+      return;
+    }
     const nextRound = currentRoundInSet + 1;
     const resetList = matchPlayers.map((p) => ({
       ...p,
@@ -996,6 +1036,7 @@ export default function App() {
     setMatchWinner(null);
     setIsMatchDraw(false);
     resetSlotVisuals();
+    summaryRoundRef.current = 0;
 
     if (activeView === 'match') {
       syncRoomStateToServer(
@@ -1012,6 +1053,11 @@ export default function App() {
   };
 
   const handleNextSet = () => {
+    if (summarySetRef.current > 0 && summarySetRef.current !== currentSetIndex) {
+      setIsSetSummaryOpen(false);
+      summarySetRef.current = 0;
+      return;
+    }
     const nextSetIdx = currentSetIndex + 1;
     setCurrentSetIndex(nextSetIdx);
     setCurrentRoundInSet(1);
@@ -1042,6 +1088,8 @@ export default function App() {
     setIsSetSummaryOpen(false);
     setMatchState('playing');
     resetSlotVisuals();
+    summaryRoundRef.current = 0;
+    summarySetRef.current = 0;
 
     if (activeView === 'match') {
       syncRoomStateToServer(
@@ -1194,6 +1242,8 @@ export default function App() {
 
     const roundsPerSet = playersList.length || 3;
     const isSetEnd = currentRoundInSet >= roundsPerSet;
+    summaryRoundRef.current = currentRoundInSet;
+    summarySetRef.current = currentSetIndex;
     if (isSetEnd) {
       setIsSetSummaryOpen(true);
     } else {
