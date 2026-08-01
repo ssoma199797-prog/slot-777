@@ -20,6 +20,16 @@ const SLOT_KEEPALIVE_MS = 60_000;
 // room id every write would be rejected for.
 const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 
+/** The name a registration is sent under, kept in one place so it can be compared. */
+function normaliseName(raw: string): string {
+  return raw.trim() || 'プレイヤー';
+}
+
+/** Collision-proof device id: a timestamp no other tab shares plus randomness. */
+function newDeviceId(): string {
+  return `dev_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
 // What the reels rest on before anything has been spun.
 const INITIAL_REEL_VALUE = 777;
 
@@ -255,26 +265,70 @@ export default function App() {
   // its timer on every keystroke.
   const userNameInputRef = useRef<string>(userNameInput);
   userNameInputRef.current = userNameInput;
+  // The name this device last registered under. If the room ever reports a
+  // different name against our device id, the id is not ours any more.
+  const lastSentNameRef = useRef<string>('');
+  // Read inside applyRoomState, which is memoised and must not close over stale values.
+  const deviceIdRef = useRef<string>('');
+  const hasJoinedRoomRef = useRef<boolean>(false);
+  /** Normalises the name and remembers what we registered under. */
+  const recordSentName = (raw: string): string => {
+    const name = normaliseName(raw);
+    lastSentNameRef.current = name;
+    return name;
+  };
   const [remoteStoppedReels, setRemoteStoppedReels] = useState<boolean[]>([false, false, false]);
 
   const activeSpinRef = useRef<any>(null);
   const lastProcessedSpinIdRef = useRef<number | null>(null);
 
   // Generate or retrieve persistent browser device ID
-  const deviceId = useMemo(() => {
+  const [deviceId, setDeviceId] = useState<string>(() => {
     try {
       // MUST be sessionStorage: it is per-tab. localStorage is shared across every
       // tab of the same browser, which made a second tab claim the first tab's slot.
-      let id = sessionStorage.getItem('slot_device_id');
-      if (!id) {
-        id = 'dev_' + Math.random().toString(36).substring(2, 9);
-        sessionStorage.setItem('slot_device_id', id);
-      }
-      return id;
+      const stored = sessionStorage.getItem('slot_device_id');
+      if (stored) return stored;
+      const fresh = newDeviceId();
+      sessionStorage.setItem('slot_device_id', fresh);
+      return fresh;
     } catch {
-      return 'dev_' + Math.random().toString(36).substring(2, 9);
+      return newDeviceId();
     }
-  }, []);
+  });
+
+  // Two devices sharing an id is fatal: the second registration overwrites the
+  // first in the room roster, so both end up as one player under the later name.
+  // Duplicating a tab copies sessionStorage verbatim, so ids do get shared in
+  // practice. Every tab announces the id it is using; whoever hears its own id
+  // announced by somebody else takes a new one.
+  useEffect(() => {
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel('slot_device_claim');
+    } catch {
+      return;
+    }
+    const claim = channel;
+    claim.onmessage = (event) => {
+      const data = event.data;
+      if (!data || data.deviceId !== deviceId) return;
+      if (data.type === 'claim') {
+        // Someone else announced our id — tell them it is already in use.
+        claim.postMessage({ type: 'taken', deviceId });
+      } else if (data.type === 'taken') {
+        const replacement = newDeviceId();
+        try {
+          sessionStorage.setItem('slot_device_id', replacement);
+        } catch {
+          // in-memory id is still enough for this session
+        }
+        setDeviceId(replacement);
+      }
+    };
+    claim.postMessage({ type: 'claim', deviceId });
+    return () => claim.close();
+  }, [deviceId]);
 
   // Server sync helper (persists state across all connected devices via Cloud Run API)
   // Reads the room through a ref: `setRoomId` does not take effect until the next
@@ -292,7 +346,7 @@ export default function App() {
         broadcastEvent,
         deviceRegistration: {
           deviceId,
-          playerName: userNameInput.trim() || 'プレイヤー',
+          playerName: recordSentName(userNameInput),
           inLobby: matchStateRef.current === 'lobby',
         },
       }),
@@ -373,6 +427,9 @@ export default function App() {
   const isDisconnectedRef = useRef<boolean>(false);
   // Skill subtraction that the spin in progress will apply to its result.
   const lastAppliedBonusRef = useRef<number>(0);
+  deviceIdRef.current = deviceId;
+  hasJoinedRoomRef.current = hasJoinedRoom;
+
   // Bumped once per spin. SlotReels resets everything it carries between spins
   // when this changes, so a spin that ended badly cannot leak into the next one.
   const [spinToken, setSpinToken] = useState<number>(0);
@@ -444,7 +501,28 @@ export default function App() {
 
     if (roomData) {
       if (roomData.playerNames) setPlayerNames(roomData.playerNames);
-      if (roomData.connectedDevices) setConnectedDevices(roomData.connectedDevices);
+      if (roomData.connectedDevices) {
+        setConnectedDevices(roomData.connectedDevices);
+        // Our seat is registered under another player's name: another device is
+        // using the same device id, and whoever wrote last owns the seat. Take a
+        // fresh id so both devices can sit down instead of overwriting each other.
+        const mine = roomData.connectedDevices[deviceIdRef.current];
+        if (
+          hasJoinedRoomRef.current &&
+          mine &&
+          lastSentNameRef.current &&
+          mine.playerName !== lastSentNameRef.current
+        ) {
+          const replacement = newDeviceId();
+          try {
+            sessionStorage.setItem('slot_device_id', replacement);
+          } catch {
+            // in-memory id still works for this session
+          }
+          deviceIdRef.current = replacement;
+          setDeviceId(replacement);
+        }
+      }
       if (typeof roomData.playerCount === 'number') setPlayerCount(roomData.playerCount);
       if (roomData.matchState) setMatchState(roomData.matchState);
       
@@ -755,7 +833,7 @@ export default function App() {
           roomId,
           deviceRegistration: {
             deviceId,
-            playerName: userNameInputRef.current.trim() || 'プレイヤー',
+            playerName: recordSentName(userNameInputRef.current),
             inLobby: matchStateRef.current === 'lobby',
           },
         }),
@@ -922,7 +1000,7 @@ export default function App() {
           roomId: targetRoom,
           deviceRegistration: {
             deviceId,
-            playerName: userNameInput.trim() || 'プレイヤー',
+            playerName: recordSentName(userNameInput),
             inLobby: true,
           },
         }),
