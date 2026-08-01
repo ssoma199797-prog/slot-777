@@ -41,6 +41,8 @@ interface MatchPanelProps {
   onTriggerInstantSpin: () => void;
   onShowStats?: () => void;
   onResetSession?: () => void;
+  deviceId?: string;
+  connectedDeviceCount?: number;
   sessionInProgress?: boolean;
   sessionPlayerNames?: string[];
   canLaunchGame?: boolean;
@@ -103,6 +105,8 @@ export default function MatchPanel({
   onTriggerInstantSpin,
   onShowStats,
   onResetSession,
+  deviceId = '',
+  connectedDeviceCount = 0,
   sessionInProgress = false,
   sessionPlayerNames = [],
   canLaunchGame = true,
@@ -414,6 +418,17 @@ export default function MatchPanel({
               <div className="bg-slate-950 border-2 border-amber-500/60 rounded-2xl p-3 text-center space-y-2 relative overflow-hidden shadow-[0_0_15px_rgba(245,158,11,0.2)]">
                 <div className="text-[11px] font-black text-amber-400 tracking-wider uppercase flex items-center justify-center gap-1 font-mono">
                   <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-spin" style={{ animationDuration: '6s' }} /> オンライン対戦待機室 [{roomId}]
+                </div>
+
+                {/* Identity line: which room this device is in, which slot it holds and
+                    how many devices the server has registered. Two devices that
+                    cannot see each other are almost always in different rooms, and
+                    this makes that visible at a glance. */}
+                <div className="bg-slate-900/80 border border-slate-800 rounded-lg px-2 py-1 text-[9px] font-mono text-slate-400 flex flex-wrap justify-center gap-x-2">
+                  <span>ルーム: <span className="text-indigo-300 font-bold">{roomId}</span></span>
+                  <span>自分: <span className="text-amber-300 font-bold">{myPlayerId}P</span></span>
+                  <span>端末: <span className="text-slate-300">{deviceId.replace('dev_', '')}</span></span>
+                  <span>接続: <span className="text-emerald-300 font-bold">{connectedDeviceCount}台</span></span>
                 </div>
 
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-xs text-amber-200 font-bold leading-relaxed space-y-1.5">

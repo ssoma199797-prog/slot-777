@@ -2302,6 +2302,8 @@ export default function App() {
                           onTriggerInstantSpin={triggerInstantSpin}
                           onShowStats={() => setIsStatsOpen(true)}
                           onResetSession={handleResetSession}
+                          deviceId={deviceId}
+                          connectedDeviceCount={Object.keys(connectedDevices).length}
                           sessionInProgress={sessionInProgress}
                           sessionPlayerNames={roomProbe?.names ?? []}
                           canLaunchGame={canLaunchGame}
@@ -2448,6 +2450,8 @@ export default function App() {
                           onTriggerInstantSpin={triggerInstantSpin}
                           onShowStats={() => setIsStatsOpen(true)}
                           onResetSession={handleResetSession}
+                          deviceId={deviceId}
+                          connectedDeviceCount={Object.keys(connectedDevices).length}
                           sessionInProgress={sessionInProgress}
                           sessionPlayerNames={roomProbe?.names ?? []}
                           canLaunchGame={canLaunchGame}
@@ -2629,6 +2633,8 @@ export default function App() {
                           onTriggerInstantSpin={triggerInstantSpin}
                           onShowStats={() => setIsStatsOpen(true)}
                           onResetSession={handleResetSession}
+                          deviceId={deviceId}
+                          connectedDeviceCount={Object.keys(connectedDevices).length}
                           sessionInProgress={sessionInProgress}
                           sessionPlayerNames={roomProbe?.names ?? []}
                           canLaunchGame={canLaunchGame}
