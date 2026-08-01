@@ -120,6 +120,44 @@ export function aggregateSession(gameHistory: MatchGameRecord[]): SetAggregate {
   return out;
 }
 
+/** A player's points game by game, oldest first. */
+export interface PointSeries {
+  playerId: number;
+  name: string;
+  /** What each game paid out (or cost). */
+  changes: number[];
+  /** Running total after each game — what the trend chart plots. */
+  cumulative: number[];
+}
+
+/**
+ * Point history per player, in playing order.
+ *
+ * `gameHistory` is kept newest-first for the log view, so it is sorted here
+ * rather than at the call sites.
+ */
+export function pointSeries(gameHistory: MatchGameRecord[]): PointSeries[] {
+  const ordered = [...gameHistory].sort((a, b) => a.gameIndex - b.gameIndex);
+  const byPlayer = new Map<number, PointSeries>();
+
+  for (const game of ordered) {
+    for (const res of game.results) {
+      let series = byPlayer.get(res.playerId);
+      if (!series) {
+        series = { playerId: res.playerId, name: res.playerName, changes: [], cumulative: [] };
+        byPlayer.set(res.playerId, series);
+      }
+      series.name = res.playerName;
+      series.changes.push(res.pointsEarned);
+      const previous = series.cumulative.length > 0 ? series.cumulative[series.cumulative.length - 1] : 0;
+      series.cumulative.push(previous + res.pointsEarned);
+    }
+  }
+
+  // Ordered by player id so a series keeps its colour when the ranking changes.
+  return [...byPlayer.values()].sort((a, b) => a.playerId - b.playerId);
+}
+
 /** Medal for a 0-based rank; plain numbers past third place. */
 export function rankLabel(rank: number): string {
   if (rank === 0) return '🥇 1位';

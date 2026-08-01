@@ -1,7 +1,8 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { MatchPlayer, MatchGameRecord, MatchSetRecord } from '../types';
-import { aggregateAllSets, aggregateSession, rankSet, rankLabel } from '../utils/stats';
+import { aggregateAllSets, aggregateSession, rankSet, rankLabel, pointSeries } from '../utils/stats';
+import PointsTrendChart from './PointsTrendChart';
 import { Trophy, BarChart3, Clock, X, Award, Flame, Users, RefreshCw } from 'lucide-react';
 import { motion } from 'motion/react';
 
@@ -33,6 +34,8 @@ export default function MatchStatsModal({
   // rather than read off the players — the two can only ever agree this way.
   const sessionRanking = rankSet(aggregateSession(gameHistory));
   const livePlayers = new Map(players.map((p) => [p.id, p]));
+  const series = pointSeries(gameHistory);
+  const seriesByPlayer = new Map(series.map((s) => [s.playerId, s]));
 
   // Rendered into <body>: these panels sit inside the cabinet, whose animated
   // ancestors create stacking contexts that trapped a fixed overlay behind the
@@ -117,14 +120,37 @@ export default function MatchStatsModal({
                       </div>
                     </div>
 
-                    <div className="text-[9px] text-slate-400 flex justify-between pt-1.5 border-t border-white/10 font-mono">
-                      <span>最終出目: {live?.currentScore ?? '---'}</span>
-                      <span>残りHP: {live?.points ?? 0}pt</span>
+                    <div className="pt-1.5 border-t border-white/10 font-mono">
+                      <div className="text-[9px] text-slate-400 mb-0.5">周ごとの結果</div>
+                      <div className="flex flex-wrap gap-x-1.5 gap-y-0.5 text-[10px] font-bold">
+                        {(seriesByPlayer.get(row.playerId)?.changes ?? []).length === 0 ? (
+                          <span className="text-slate-500 font-normal">まだありません</span>
+                        ) : (
+                          (seriesByPlayer.get(row.playerId)?.changes ?? []).map((change, i) => (
+                            <span
+                              key={i}
+                              className={change >= 0 ? 'text-emerald-400' : 'text-rose-400'}
+                              style={{ fontVariantNumeric: 'tabular-nums' }}
+                            >
+                              {change >= 0 ? `+${change}` : change}
+                            </span>
+                          ))
+                        )}
+                      </div>
+                      <div className="text-[9px] text-slate-400 mt-1">残りHP: {live?.points ?? 0}pt</div>
                     </div>
                   </div>
                 );
               })}
             </div>
+          </div>
+
+          {/* Cumulative points over the session — one chart, every player */}
+          <div>
+            <span className="text-xs font-black text-amber-400 uppercase tracking-wider flex items-center gap-1.5 font-mono mb-2">
+              <Users className="w-4 h-4 text-amber-400" /> 通算ポイントの推移
+            </span>
+            <PointsTrendChart series={series} />
           </div>
 
           {/* Rule Points Calculation Reference */}
