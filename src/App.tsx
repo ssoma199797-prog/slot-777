@@ -1569,7 +1569,10 @@ export default function App() {
     setStoppedCount(nextCount);
 
     const checkFreezeOrCutin = (timingOption: 'stop_1' | 'stop_2') => {
-      if (targetValue <= 10) {
+      // The blackout freeze is the one tell that never lies, so it keys off the
+      // value this spin actually lands on — not the number currently displayed,
+      // which may still be a decoy waiting to be rewritten.
+      if (realTargetValue <= 10 && rewriteTrigger === 'none') {
         if (effectTiming === timingOption) {
           triggerBlackoutFreeze({ effect: currentEffect });
         }

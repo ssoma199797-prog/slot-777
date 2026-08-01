@@ -8,20 +8,20 @@ export const CHANCE_100_EFFECTS: CutinEffect[] = [
     text: 'チャンス',
     subtitle: 'CHANCE',
     dialog: '',
-    bgGradients: 'from-blue-600/90 via-slate-900/95 to-slate-950/98',
-    borderColor: 'border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.5)]',
+    bgGradients: 'from-sky-500/80 via-slate-900/95 to-slate-950',
+    borderColor: 'border-sky-400/70 shadow-[0_0_20px_rgba(56,189,248,0.45)]',
     soundName: 'under_50',
     animationStyle: 'pulse'
   },
   {
     id: 'small_win_check',
-    name: '小役？',
+    name: '気配',
     level: 'under_100',
-    text: '小役？',
-    subtitle: 'SMALL WIN?',
+    text: '気配アリ',
+    subtitle: 'SOMETHING IS COMING',
     dialog: '',
-    bgGradients: 'from-emerald-600/90 via-slate-900/95 to-slate-950/98',
-    borderColor: 'border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.5)]',
+    bgGradients: 'from-teal-500/80 via-slate-900/95 to-slate-950',
+    borderColor: 'border-teal-300/70 shadow-[0_0_20px_rgba(45,212,191,0.45)]',
     soundName: 'under_50',
     animationStyle: 'pulse'
   }
@@ -35,8 +35,8 @@ export const CHANCE_50_EFFECTS: CutinEffect[] = [
     text: '好機',
     subtitle: 'GOOD CHANCE',
     dialog: '',
-    bgGradients: 'from-indigo-600/90 via-slate-900/95 to-slate-950/98',
-    borderColor: 'border-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.5)]',
+    bgGradients: 'from-violet-500/85 via-indigo-950/95 to-slate-950',
+    borderColor: 'border-violet-300/80 shadow-[0_0_24px_rgba(167,139,250,0.55)]',
     soundName: 'under_50',
     animationStyle: 'pulse'
   },
@@ -45,22 +45,22 @@ export const CHANCE_50_EFFECTS: CutinEffect[] = [
     name: '予兆',
     level: 'under_50',
     text: '予兆',
-    subtitle: 'SIGNS',
-    dialog: '「何かが起こりそうな気配がする…」',
-    bgGradients: 'from-violet-700/90 via-slate-900/95 to-slate-950/98',
-    borderColor: 'border-violet-500 shadow-[0_0_15px_rgba(139,92,246,0.5)]',
+    subtitle: 'SIGNS DETECTED',
+    dialog: '「…何かが動き出した」',
+    bgGradients: 'from-fuchsia-600/85 via-purple-950/95 to-slate-950',
+    borderColor: 'border-fuchsia-300/80 shadow-[0_0_24px_rgba(232,121,249,0.55)]',
     soundName: 'under_50',
     animationStyle: 'shake'
   },
   {
     id: 'develop_check',
-    name: '発展？',
+    name: '発展',
     level: 'under_50',
-    text: '発展？',
-    subtitle: 'DEVELOPMENT?',
+    text: '発展',
+    subtitle: 'NEXT STAGE?',
     dialog: '',
-    bgGradients: 'from-fuchsia-600/90 via-slate-900/95 to-slate-950/98',
-    borderColor: 'border-fuchsia-500 shadow-[0_0_15px_rgba(217,70,239,0.5)]',
+    bgGradients: 'from-cyan-500/85 via-blue-950/95 to-slate-950',
+    borderColor: 'border-cyan-300/80 shadow-[0_0_24px_rgba(103,232,249,0.55)]',
     soundName: 'under_50',
     animationStyle: 'flash'
   }
@@ -72,10 +72,10 @@ export const HOT_EFFECTS: CutinEffect[] = [
     name: '激アツ',
     level: 'under_30',
     text: '激アツ',
-    subtitle: 'SUPER HOT',
+    subtitle: 'CRITICAL HEAT',
     dialog: '',
-    bgGradients: 'from-red-600 via-red-950/95 to-slate-950/98',
-    borderColor: 'border-red-500 shadow-[0_0_25px_rgba(239,68,68,0.8)] animate-pulse',
+    bgGradients: 'from-rose-500 via-red-950 to-slate-950',
+    borderColor: 'border-rose-300 shadow-[0_0_34px_rgba(251,113,133,0.85)]',
     soundName: 'under_30',
     animationStyle: 'lightning'
   },
@@ -84,34 +84,34 @@ export const HOT_EFFECTS: CutinEffect[] = [
     name: '灼熱',
     level: 'under_30',
     text: '灼熱',
-    subtitle: 'SEARING HOT',
-    dialog: '「この熱さ、本物だ！」',
-    bgGradients: 'from-amber-600 via-red-950/95 to-slate-950/98',
-    borderColor: 'border-amber-500 shadow-[0_0_25px_rgba(245,158,11,0.8)] animate-pulse',
+    subtitle: 'OVERHEAT',
+    dialog: '「この熱、本物だ」',
+    bgGradients: 'from-orange-400 via-rose-950 to-slate-950',
+    borderColor: 'border-orange-200 shadow-[0_0_34px_rgba(251,146,60,0.85)]',
     soundName: 'under_30',
     animationStyle: 'lightning'
   },
   {
     id: 'glitch_mismatch',
-    name: '違和感：液晶バグ',
+    name: 'ノイズ',
     level: 'under_30',
-    text: '液晶バグ',
-    subtitle: 'SYSTEM GLITCH',
-    dialog: '「画面の様子がおかしい…！？」',
-    bgGradients: 'from-rose-950 via-slate-950 to-red-950/90',
-    borderColor: 'border-rose-600 shadow-[0_0_25px_rgba(225,29,72,0.8)]',
+    text: 'ノイズ',
+    subtitle: 'SIGNAL LOST',
+    dialog: '「…画面が、壊れてる？」',
+    bgGradients: 'from-emerald-400/90 via-slate-950 to-rose-950',
+    borderColor: 'border-emerald-200 shadow-[0_0_34px_rgba(52,211,153,0.8)]',
     soundName: 'under_30',
     animationStyle: 'glitch'
   },
   {
     id: 'silence_mismatch',
-    name: '違和感：静寂',
+    name: '静寂',
     level: 'under_30',
-    text: '一瞬の静寂',
-    subtitle: 'MOMENT OF SILENCE',
-    dialog: '「…ッ！？音が消えた？」',
-    bgGradients: 'from-slate-900 via-zinc-950 to-slate-950',
-    borderColor: 'border-slate-500 shadow-[0_0_20px_rgba(255,255,255,0.2)]',
+    text: '静寂',
+    subtitle: 'SILENCE',
+    dialog: '「────」',
+    bgGradients: 'from-slate-700 via-zinc-950 to-black',
+    borderColor: 'border-white/70 shadow-[0_0_30px_rgba(255,255,255,0.45)]',
     soundName: 'under_30',
     animationStyle: 'pulse'
   }
@@ -123,10 +123,10 @@ export const LEGEND_EFFECTS: CutinEffect[] = [
     name: '確定',
     level: 'under_10',
     text: '確定',
-    subtitle: 'CONGRATS',
+    subtitle: 'CONFIRMED',
     dialog: '',
-    bgGradients: 'from-pink-500 via-indigo-600 to-purple-900/90',
-    borderColor: 'border-indigo-400 shadow-[0_0_35px_rgba(139,92,246,0.9)]',
+    bgGradients: 'from-fuchsia-500 via-violet-600 to-cyan-500',
+    borderColor: 'border-white shadow-[0_0_45px_rgba(217,70,239,0.95)]',
     soundName: 'under_10',
     animationStyle: 'flash'
   },
@@ -135,10 +135,10 @@ export const LEGEND_EFFECTS: CutinEffect[] = [
     name: '降臨',
     level: 'under_10',
     text: '降臨',
-    subtitle: 'GOD ARRIVAL',
-    dialog: '「ついに、神が舞い降りる」',
-    bgGradients: 'from-yellow-600 via-amber-950 to-slate-950/98',
-    borderColor: 'border-yellow-400 shadow-[0_0_35px_rgba(234,179,8,0.9)] animate-pulse',
+    subtitle: 'DESCEND',
+    dialog: '「頭が高い」',
+    bgGradients: 'from-amber-300 via-yellow-600 to-slate-950',
+    borderColor: 'border-amber-100 shadow-[0_0_45px_rgba(252,211,77,0.95)]',
     soundName: 'under_10',
     animationStyle: 'lightning'
   },
@@ -147,10 +147,10 @@ export const LEGEND_EFFECTS: CutinEffect[] = [
     name: '夢幻',
     level: 'under_10',
     text: '夢幻',
-    subtitle: 'INFINITE DREAM',
-    dialog: '「終わらない夢を見せてやる」',
-    bgGradients: 'from-cyan-500 via-purple-600 to-pink-600',
-    borderColor: 'border-pink-400 shadow-[0_0_35px_rgba(236,72,153,0.9)]',
+    subtitle: 'INFINITE',
+    dialog: '「まだ終わらせない」',
+    bgGradients: 'from-cyan-300 via-fuchsia-500 to-violet-700',
+    borderColor: 'border-cyan-100 shadow-[0_0_45px_rgba(103,232,249,0.95)]',
     soundName: 'under_10',
     animationStyle: 'flash'
   },
@@ -158,11 +158,11 @@ export const LEGEND_EFFECTS: CutinEffect[] = [
     id: 'puchun_revelation',
     name: 'フリーズ',
     level: 'under_10',
-    text: '全回転',
-    subtitle: 'FREEZE REVELATION',
-    dialog: '「時よ、止まれ…！」',
-    bgGradients: 'from-black via-zinc-900 to-black',
-    borderColor: 'border-zinc-400 shadow-[0_0_30px_rgba(255,255,255,0.7)]',
+    text: 'フリーズ',
+    subtitle: 'FREEZE',
+    dialog: '「動くな」',
+    bgGradients: 'from-white via-slate-300 to-slate-900',
+    borderColor: 'border-white shadow-[0_0_50px_rgba(255,255,255,0.9)]',
     soundName: 'under_10',
     animationStyle: 'glitch'
   }
@@ -200,6 +200,21 @@ export const STRICT_UNIFORM_DISTRIBUTION = true;
  * caps the cut-in rate on two-digit results — lower it to see more cut-ins.
  */
 export const MISMATCH_RATE = 0.32;
+
+/**
+ * How often a spin that is already lost still shows a cut-in of each tier.
+ *
+ * The rule is that heat has to mean something: the hotter the cut-in, the less
+ * often it lies. チャンス is barely a promise, 確定 almost always keeps its word.
+ * The blackout freeze is deliberately absent — it never fires on a losing spin,
+ * so it stays the one tell that cannot betray you.
+ */
+export const FAKE_CUTIN_RATES = {
+  under_100: 0.016,   // チャンス      … 約1/63
+  under_50: 0.005,    // 好機          … 約1/200
+  under_30: 0.0015,   // 激アツ・灼熱  … 約1/670
+  under_10: 0.0003,   // 確定・降臨    … 約1/3300
+};
 
 /**
  * Cryptographically strong random float in [0, 1).
@@ -375,14 +390,18 @@ export const performLottery = (
   // Mismatches silence normal lever cut-ins to preserve the eerie "weirdness" feeling
   if (mismatchType === 'none') {
     // 5. Decide if cutin occurs and select from pool (Rich overlapping rates to allow surprise wins!)
+    // A cut-in may always UNDER-sell the result — landing on 8 after a mere
+    // "チャンス" is a pleasant surprise, not a betrayal. What it must not do is
+    // over-sell, so a winning spin never reaches for a hotter tier than it earned.
+    // Over-selling is reserved for the losing branch below, at FAKE_CUTIN_RATES.
     if (baseLevel === 'under_10') {
       isCutinTriggered = true;
       const randPool = secureRandom();
-      if (randPool < 0.65) {
+      if (randPool < 0.70) {
         pool = [...LEGEND_EFFECTS];
-      } else if (randPool < 0.85) {
+      } else if (randPool < 0.88) {
         pool = [...HOT_EFFECTS];
-      } else if (randPool < 0.95) {
+      } else if (randPool < 0.96) {
         pool = [...CHANCE_50_EFFECTS]; // "好機" can also turn out to be under 10!
       } else {
         pool = [...CHANCE_100_EFFECTS]; // "チャンス" can also turn out to be under 10!
@@ -390,9 +409,9 @@ export const performLottery = (
     } else if (baseLevel === 'under_30') {
       isCutinTriggered = true;
       const randPool = secureRandom();
-      if (randPool < 0.75) {
+      if (randPool < 0.82) {
         pool = [...HOT_EFFECTS];
-      } else if (randPool < 0.93) {
+      } else if (randPool < 0.95) {
         pool = [...CHANCE_50_EFFECTS]; // "好機" can be under 30!
       } else {
         pool = [...CHANCE_100_EFFECTS]; // "チャンス" can be under 30!
@@ -400,50 +419,74 @@ export const performLottery = (
     } else if (baseLevel === 'under_50') {
       isCutinTriggered = true;
       const randPool = secureRandom();
-      if (randPool < 0.75) {
+      if (randPool < 0.85) {
         pool = [...CHANCE_50_EFFECTS];
-      } else if (randPool < 0.93) {
-        pool = [...CHANCE_100_EFFECTS]; // "チャンス" can be under 50!
       } else {
-        pool = [...HOT_EFFECTS]; // Small chance of overhyping with "激アツ"
+        pool = [...CHANCE_100_EFFECTS]; // "チャンス" can be under 50!
       }
     } else if (baseLevel === 'under_100') {
       // Two-digit results are the ones players care about, so they almost always
       // get a cut-in; 30以下・50以下 are already guaranteed above.
       const chanceTrigger = cutinFrequency === 'high' ? 1 : cutinFrequency === 'low' ? 0.88 : 0.97;
       isCutinTriggered = secureRandom() < chanceTrigger;
+      // Only チャンス here. Letting a 51-100 borrow 好機 was over-selling, and it
+      // made 好機 lie more often than the tier below it.
       if (isCutinTriggered) {
-        const randPool = secureRandom();
-        if (randPool < 0.88) {
-          pool = [...CHANCE_100_EFFECTS];
-        } else {
-          pool = [...CHANCE_50_EFFECTS]; // "好機" occasionally used
-        }
+        pool = [...CHANCE_100_EFFECTS];
       }
     } else {
-      // ハズレ (initialValue > 100): Fake cut-ins
-      const fakeChance = cutinFrequency === 'high' ? 0.05 : cutinFrequency === 'low' ? 0.005 : 0.02;
-      isCutinTriggered = secureRandom() < fakeChance;
-      if (isCutinTriggered) {
-        const randFake = secureRandom();
-        if (randFake < 0.85) {
-          pool = [...CHANCE_100_EFFECTS]; // 85% is "チャンス"
-        } else if (randFake < 0.97) {
-          pool = [...CHANCE_50_EFFECTS];  // 12% is "好機"
-        } else {
-          pool = [...HOT_EFFECTS];        // 3% is "激アツ" or "灼熱" (たまーーーーにガセ!)
-        }
+      // ハズレ (initialValue > 100): this is where a cut-in is a lie.
+      // Rolled hottest-first so the rare tiers are never masked by the common
+      // ones, and each tier is rarer than the one below it — a 激アツ that lies is
+      // uncommon, a 確定 that lies is a story you tell afterwards.
+      const scale = cutinFrequency === 'high' ? 2 : cutinFrequency === 'low' ? 0.4 : 1;
+      const roll = secureRandom();
+      let ceiling = FAKE_CUTIN_RATES.under_10 * scale;
+      if (roll < ceiling) {
+        isCutinTriggered = true;
+        pool = [...LEGEND_EFFECTS];
+      } else if (roll < (ceiling += FAKE_CUTIN_RATES.under_30 * scale)) {
+        isCutinTriggered = true;
+        pool = [...HOT_EFFECTS];
+      } else if (roll < (ceiling += FAKE_CUTIN_RATES.under_50 * scale)) {
+        isCutinTriggered = true;
+        pool = [...CHANCE_50_EFFECTS];
+      } else if (roll < ceiling + FAKE_CUTIN_RATES.under_100 * scale) {
+        isCutinTriggered = true;
+        pool = [...CHANCE_100_EFFECTS];
+      }
+    }
+
+    // A spin that is about to snatch the number away (the 99以下 tease that gets
+    // rewritten back up) is the harshest betrayal in the game. Left alone it
+    // inherited the cut-in tier of the *teased* number, so 確定 lied as often as
+    // チャンス did. Here the promise is deliberately kept small, so the hotter the
+    // cut-in the likelier it is that the number is really yours.
+    if (rewriteTrigger === 'dummy_99_success') {
+      // Not every betrayal announces itself, which keeps a quiet 99以下 from
+      // becoming a tell in its own right.
+      isCutinTriggered = secureRandom() < 0.5;
+      const r = secureRandom();
+      if (r < 0.70) {
+        pool = [...CHANCE_100_EFFECTS];
+      } else if (r < 0.92) {
+        pool = [...CHANCE_50_EFFECTS];
+      } else if (r < 0.99) {
+        pool = [...HOT_EFFECTS];
+      } else {
+        pool = [...LEGEND_EFFECTS];
       }
     }
 
     if (isCutinTriggered && pool.length > 0) {
       selectedEffect = pool[Math.floor(secureRandom() * pool.length)];
 
-      // Select timing (lever_on: 60%, stop_1: 25%, stop_2: 15%)
+      // Lever, 1st stop and 2nd stop each get an equal share, so where a cut-in
+      // lands carries no information about how good the spin is.
       const randTime = secureRandom();
-      if (randTime < 0.60) {
+      if (randTime < 1 / 3) {
         timing = 'lever_on';
-      } else if (randTime < 0.85) {
+      } else if (randTime < 2 / 3) {
         timing = 'stop_1';
       } else {
         timing = 'stop_2';
