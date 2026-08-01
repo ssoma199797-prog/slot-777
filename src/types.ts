@@ -68,6 +68,8 @@ export interface SkillSelection {
 export interface MatchGameRecord {
   gameIndex: number;
   setIndex: number;
+  /** 何周目のゲームか（1始まり）。セット内の並び順に使う。 */
+  roundInSet?: number;
   results: {
     playerId: number;
     playerName: string;

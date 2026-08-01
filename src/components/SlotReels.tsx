@@ -23,6 +23,8 @@ interface SlotReelsProps {
   activePlayerScore?: number | null;
   hasConsumedPointsThisTurn?: boolean;
   remoteStoppedReels?: boolean[];
+  /** Changes once per spin. Anything internal that survives a spin resets on it. */
+  spinToken?: number;
 }
 
 // Longer strip to enable realistic physical rolling and overshoot buffer
@@ -51,6 +53,7 @@ export default function SlotReels({
   activePlayerScore = null,
   hasConsumedPointsThisTurn = false,
   remoteStoppedReels,
+  spinToken = 0,
 }: SlotReelsProps) {
   // Parse targetValue to digits e.g. 15 -> [0, 1, 5]
   // Skills subtract with no floor, so a match score legitimately goes negative
@@ -124,6 +127,18 @@ export default function SlotReels({
       prevTargetValueRef.current = targetValue;
     }
   }, [targetValue, isSpinning]);
+
+  // A spin that ended badly (a dropped sync message, a device that was asleep)
+  // used to leave these refs half-set, and every later spin inherited that state.
+  // Tying the reset to the spin id makes each spin start from a known point.
+  useEffect(() => {
+    stoppingRef.current = [false, false, false];
+    finishedRef.current = [false, false, false];
+    setReelStates(['idle', 'idle', 'idle']);
+    setReelBumps([false, false, false]);
+    setButtonGlows([false, false, false]);
+    setButtonShakes([false, false, false]);
+  }, [spinToken]);
 
   // Track active spins
   useEffect(() => {
@@ -464,12 +479,15 @@ export default function SlotReels({
               {/* Reel Strips with CSS Filter-based motion blur */}
               <motion.div
                 animate={reelControls[idx]}
-                className={`flex flex-col text-center transition-all duration-100 ${
-                  isSpin 
-                    ? 'blur-[3px] scale-y-105 opacity-80' 
+                // No filter transition here: this column is transforming every
+                // frame, and animating a blur on top of that forced a full
+                // re-rasterisation per frame on phones.
+                className={`flex flex-col text-center ${
+                  isSpin
+                    ? 'blur-[2px] opacity-80'
                     : isStopping
-                    ? 'blur-[1px] scale-y-100'
-                    : 'blur-0'
+                    ? 'opacity-95'
+                    : ''
                 }`}
                 style={{ transformOrigin: 'center center' }}
               >
@@ -484,7 +502,7 @@ export default function SlotReels({
                     <div
                       key={sIdx}
                       style={{ height: `${itemHeight}px` }}
-                      className={`w-full flex items-center justify-center font-display font-black text-5xl tracking-tighter transition-all duration-150 ${
+                      className={`w-full flex items-center justify-center font-display font-black text-5xl tracking-tighter transition-colors duration-150 ${
                         isSpin 
                           ? 'text-sky-400/80' 
                           : isHighlighted

@@ -29,6 +29,7 @@ const RATE_LIMIT_MAX_WRITES = 120;            // per IP per window
 // clients re-announce every SLOT_KEEPALIVE_MS (src/App.tsx), so this only
 // expires seats whose device has actually gone away.
 const SLOT_RESERVATION_MS = 5 * 60 * 1000;
+const MAX_HISTORY_PER_PLAYER = 20;
 
 const ROOM_ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
 
@@ -43,6 +44,7 @@ interface ActiveSpin {
   rewriteTrigger?: string;
   timing?: string;
   isInstant?: boolean;
+  skillBonus?: number;
   stoppedReels?: boolean[];
   senderId?: number;
   timestamp?: number;
@@ -59,7 +61,7 @@ interface RoomData {
   currentRoundInSet: number;
   skillSelection: unknown;
   activeSpin: ActiveSpin | null;
-  connectedDevices: Record<string, { deviceId: string; playerName: string; slot: number; updatedAt: number }>;
+  connectedDevices: Record<string, { deviceId: string; playerName: string; slot: number; inLobby: boolean; updatedAt: number }>;
   updatedAt: number;
 }
 
@@ -113,7 +115,10 @@ function sanitizePlayer(p: any): Record<string, unknown> | null {
     usedAll5Points: Boolean(p.usedAll5Points),
     skillsActive: { minus5Active: Boolean(p.skillsActive?.minus5Active) },
     spinCount: clampInt(p.spinCount, 0, 9999, 0),
-    history: Array.isArray(p.history) ? p.history.slice(0, 100).map((v: unknown) => clampInt(v, -999, 999, 0)) : [],
+    // Kept short on purpose: the roster is re-broadcast on every reel stop, and
+    // a 100-entry log per player was a third of each frame for data no screen
+    // reads. Phones on a weak link feel that.
+    history: Array.isArray(p.history) ? p.history.slice(0, MAX_HISTORY_PER_PLAYER).map((v: unknown) => clampInt(v, -999, 999, 0)) : [],
     totalMatchPoints: clampInt(p.totalMatchPoints, -9_999_999, 9_999_999, 0),
     winCount: clampInt(p.winCount, 0, 9999, 0),
     hasConsumedPointsThisTurn: Boolean(p.hasConsumedPointsThisTurn),
@@ -188,6 +193,9 @@ function mergeRoomData(target: RoomData, incoming: any): RoomData {
           rewriteTrigger: cleanString(s.rewriteTrigger, 40) || "none",
           timing: cleanString(s.timing, 20) || "none",
           isInstant: Boolean(s.isInstant),
+          // Skill subtraction the acting device will apply to this result, so
+          // every screen animates to the same final number.
+          skillBonus: clampInt(s.skillBonus, 0, 999, 0),
           stoppedReels: Array.isArray(s.stoppedReels)
             ? s.stoppedReels.slice(0, 3).map(Boolean)
             : [false, false, false],
@@ -206,6 +214,7 @@ function sanitizeRecord(r: any): Record<string, unknown> | null {
   return {
     gameIndex: clampInt(r.gameIndex, 0, 999_999, 0),
     setIndex: clampInt(r.setIndex, 0, 9999, 0),
+    roundInSet: clampInt(r.roundInSet, 0, MAX_PLAYERS, 0),
     timestamp: cleanString(r.timestamp, 16),
     results: results.map((x: any) => ({
       playerId: clampInt(x?.playerId, 0, MAX_PLAYERS, 0),
@@ -238,12 +247,29 @@ function sanitizeBroadcast(ev: any): any | null {
         rewriteTrigger: cleanString(ev.rewriteTrigger, 40) || "none",
         timing: cleanString(ev.timing, 20) || "none",
         isInstant: Boolean(ev.isInstant),
+        skillBonus: clampInt(ev.skillBonus, 0, 999, 0),
         stoppedReels: Array.isArray(ev.stoppedReels) ? ev.stoppedReels.slice(0, 3).map(Boolean) : [false, false, false],
       };
+    // spinId travels with every spin-scoped event so a device can tell a message
+    // about the spin it is running from a late one about the previous spin.
     case "STOP_REEL":
-      return { ...base, reelIdx: clampInt(ev.reelIdx, 0, 2, 0) };
+      return {
+        ...base,
+        reelIdx: clampInt(ev.reelIdx, 0, 2, 0),
+        spinId: clampInt(ev.spinId, 0, Number.MAX_SAFE_INTEGER, 0),
+      };
+    // Authoritative end-of-spin. STOP_REEL is three separate messages and any one
+    // of them going missing used to leave a spectator's reels spinning forever;
+    // this single message carries everything needed to land on the same result.
+    case "SPIN_RESULT":
+      return {
+        ...base,
+        spinId: clampInt(ev.spinId, 0, Number.MAX_SAFE_INTEGER, 0),
+        finalValue: clampInt(ev.finalValue, -999, 999, 0),
+        skillBonus: clampInt(ev.skillBonus, 0, 999, 0),
+      };
     case "EXECUTE_REWRITE":
-      return base;
+      return { ...base, spinId: clampInt(ev.spinId, 0, Number.MAX_SAFE_INTEGER, 0) };
     case "SEND_STAMP":
       return { ...base, stampText: cleanString(ev.stampText, 40), senderName: cleanString(ev.senderName, MAX_NAME_LEN) };
     case "ROUND_RESULT":
@@ -407,6 +433,18 @@ async function startServer() {
       room = emptyRoom(roomId);
     }
 
+    const broadcastEvent = sanitizeBroadcast(req.body?.broadcastEvent);
+
+    // Ending a session has to clear the seats too. Resetting only the match state
+    // left every device still registered, so the next session opened with the old
+    // line-up already in it.
+    if (broadcastEvent?.type === "DISBAND") {
+      const emptied = emptyRoom(roomId);
+      rooms.set(roomId, emptied);
+      notifyRoomClients(roomId, { type: "DISBAND", roomData: emptied, broadcastEvent });
+      return res.json({ success: true, roomData: emptied });
+    }
+
     room = mergeRoomData(room, req.body?.roomData);
 
     const reg = req.body?.deviceRegistration;
@@ -431,6 +469,9 @@ async function startServer() {
           deviceId,
           playerName: cleanString(reg.playerName, MAX_NAME_LEN) || `プレイヤー${slot}`,
           slot,
+          // Whether this device is sitting on the lobby screen right now, so the
+          // start button can wait until everyone who joined is actually there.
+          inLobby: Boolean(reg.inLobby),
           updatedAt: Date.now(),
         };
       }
@@ -453,7 +494,6 @@ async function startServer() {
     room.updatedAt = Date.now();
     rooms.set(roomId, room);
 
-    const broadcastEvent = sanitizeBroadcast(req.body?.broadcastEvent);
     const payload = {
       type: broadcastEvent?.type || "STATE_UPDATED",
       roomData: room,

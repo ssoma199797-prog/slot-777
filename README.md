@@ -1,4 +1,4 @@
-# 数字スロット 777
+# うんちゲーム💩 777
 
 パチスロ風の演出をまとった数値抽選アプリ。1人用の抽選モードと、複数端末リアルタイム同期のオンライン対戦モードを備えます。
 
@@ -18,11 +18,15 @@ npm run lint      # 型チェック
 npm run dev       # http://localhost:3000
 ```
 
-本番ビルドの確認:
+**実際に対戦して遊ぶときは、必ず本番モードで起動してください。**
 
 ```bash
-npm run build && npm start
+npm run play
 ```
+
+`npm run dev` は開発用で、画面を組み立てる部品を細切れのまま何百回も取りに行きます（実測 約3.8MB・逐次リクエスト）。本番モードは1ファイル（gzip 約143KB）にまとまるため **約26分の1** の転送量になります。スマートフォンから接続すると、この差がそのまま「リールが止まらない」「同期が遅い」という体感になります。
+
+なお同期そのものは速く、同一LANでの実測は **平均4.6ms・取りこぼし0件**（リール停止が相手端末に届くまで／10回計測）でした。遅さを感じる場合は、まず本番モードで起動しているかを確認してください。
 
 成果物は `dist/client/`（フロントエンド）と `dist/server.cjs`（同期サーバー）に出ます。
 
@@ -115,7 +119,7 @@ npm run build && npm start
 1. GitHubにリポジトリを作成し、このフォルダを push（ブランチ名は `main`）
 
 ```bash
-git init && git add -A && git commit -m "数字スロット 777"
+git init && git add -A && git commit -m "うんちゲーム💩 777"
 git branch -M main
 git remote add origin https://github.com/<あなたのID>/slot-777.git
 git push -u origin main

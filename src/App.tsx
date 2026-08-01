@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { performLottery, isZoromeVal } from './utils/effects';
-import { toggleMute, isSoundEnabled, playWinFanfare, playCutinSound, playPuchunSound, playFreezeRevealSound, playButtonUnlockSound, playRewriteTriggerSound, playRewriteSuccessSound, playRewriteFailureSound, playMockTriggerSound, playMockLaughSound, playLeverOn, playWeirdLeverSound, playZoromeVictorySound, playStampSound } from './utils/audio';
+import { toggleMute, isSoundEnabled, playWinFanfare, playCutinSound, playPuchunSound, playFreezeRevealSound, playButtonUnlockSound, playRewriteTriggerSound, playRewriteSuccessSound, playRewriteFailureSound, playMockTriggerSound, playMockLaughSound, playLeverOn, playWeirdLeverSound, playZoromeVictorySound, playStampSound, playConfirmScoreSound, playYourTurnSound } from './utils/audio';
 import { CutinEffect, CutinTiming, SlotState, HistoryItem, MismatchType, RewriteTriggerType, MatchPlayer, SkillSelection, MatchGameRecord, MatchSetRecord } from './types';
 import SlotLCD from './components/SlotLCD';
 import SlotReels from './components/SlotReels';
@@ -19,6 +19,24 @@ const SLOT_KEEPALIVE_MS = 60_000;
 // Same shape the server accepts, so a hand-edited link cannot get us stuck on a
 // room id every write would be rejected for.
 const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
+
+// What the reels rest on before anything has been spun.
+const INITIAL_REEL_VALUE = 777;
+
+// Losers pay the winner in multiples of this, so the scoreboard stays readable.
+const PENALTY_STEP = 100;
+
+// How long a spectator lets the normal reel-stop animation play before it forces
+// itself onto the result the acting device already published. Long enough not to
+// cut a healthy spin short, short enough that a dropped message is not a stall.
+const SPIN_RESULT_FALLBACK_MS = 2500;
+
+// Reaction stamps on screen at the same time.
+const MAX_VISIBLE_STAMPS = 4;
+
+// Upper bound on how long a device refuses room updates because it thinks a spin
+// is still running.
+const SPIN_HOLD_MAX_MS = 45_000;
 
 /** Room id carried by a shared link (`?room=…`), when it is well formed. */
 function roomIdFromShareLink(): string | null {
@@ -56,6 +74,13 @@ export default function App() {
   const [playerCount, setPlayerCount] = useState<number>(3);
   const [playerNames, setPlayerNames] = useState<string[]>([]);
   const [matchState, setMatchState] = useState<'setup' | 'lobby' | 'playing' | 'set_summary' | 'game_over'>('setup');
+  // Read by the sync helpers, which must report this device's current screen
+  // without being re-created every time the screen changes.
+  const matchStateRef = useRef(matchState);
+  matchStateRef.current = matchState;
+  // Devices the server currently has registered for this room, so the lobby can
+  // tell whether everyone who joined is actually sitting on the lobby screen.
+  const [connectedDevices, setConnectedDevices] = useState<Record<string, { deviceId: string; playerName: string; slot: number; inLobby?: boolean }>>({});
   const [matchPlayers, setMatchPlayers] = useState<MatchPlayer[]>([]);
   const [activePlayerIndex, setActivePlayerIndex] = useState<number>(0);
   const [currentSetIndex, setCurrentSetIndex] = useState<number>(1);
@@ -85,10 +110,12 @@ export default function App() {
     const id = Math.random().toString(36).substring(2, 9);
     const x = Math.floor(Math.random() * 60) + 20;
     const stamp = { id, text: stampText, sender: senderName, x };
-    setFlyingStamps((prev) => [...prev.slice(-10), stamp]);
+    // Hard cap: a burst of reactions used to leave a dozen animated layers on
+    // screen at once, which is more than a phone can composite smoothly.
+    setFlyingStamps((prev) => [...prev.slice(-(MAX_VISIBLE_STAMPS - 1)), stamp]);
     setTimeout(() => {
       setFlyingStamps((prev) => prev.filter((s) => s.id !== id));
-    }, 2800);
+    }, 2000);
 
     // Relay to every other device in the room (the receive path already existed,
     // but nothing was ever sending, so stamps never left the local screen).
@@ -202,6 +229,16 @@ export default function App() {
   };
 
   const [roomId, setRoomId] = useState<string>('GLOBAL_LOBBY');
+  // `roomId` only names the room this device *would* join; it is the default room
+  // until the player picks another. Nothing may talk to the server, claim a slot,
+  // or adopt a room's state until the player has actually pressed the join
+  // button — otherwise merely opening the 対戦 tab registers you into the default
+  // room, and every device shows the same lobby as player 1.
+  const [hasJoinedRoom, setHasJoinedRoom] = useState<boolean>(false);
+  // Lets a handler post to the room it is joining right now, before the state
+  // update that names it has been rendered.
+  const roomIdRef = useRef<string>(roomId);
+  roomIdRef.current = roomId;
   const [myPlayerId, setMyPlayerId] = useState<number>(1);
   const [joinMode, setJoinMode] = useState<'create' | 'join'>(() => (roomIdFromShareLink() ? 'join' : 'create'));
   const [customRoomInput, setCustomRoomInput] = useState<string>(() => {
@@ -240,31 +277,36 @@ export default function App() {
   }, []);
 
   // Server sync helper (persists state across all connected devices via Cloud Run API)
+  // Reads the room through a ref: `setRoomId` does not take effect until the next
+  // render, so joining a new room and syncing in the same handler used to post the
+  // new room's state to the room we just left.
   const syncRoomStateToServer = useCallback((roomDataUpdates: any, broadcastEvent?: any) => {
-    if (!roomId) return;
+    const targetRoomId = roomIdRef.current;
+    if (!targetRoomId) return;
     fetch('/api/sync/state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        roomId,
+        roomId: targetRoomId,
         roomData: roomDataUpdates,
         broadcastEvent,
         deviceRegistration: {
           deviceId,
           playerName: userNameInput.trim() || 'プレイヤー',
+          inLobby: matchStateRef.current === 'lobby',
         },
       }),
     }).catch(() => {});
 
     // Fallback broadcast channel for same-tab
     try {
-      const bc = new BroadcastChannel('slot_match_room_' + roomId);
+      const bc = new BroadcastChannel('slot_match_room_' + targetRoomId);
       bc.postMessage({ roomDataUpdates, broadcastEvent, senderId: myPlayerId });
       bc.close();
     } catch {
       // ignore
     }
-  }, [roomId, myPlayerId, deviceId, userNameInput]);
+  }, [myPlayerId, deviceId, userNameInput]);
 
   // Helper to trigger identical spin animation on non-active devices
   const startRemoteSpin = useCallback((data: any) => {
@@ -272,6 +314,16 @@ export default function App() {
       setRemoteStoppedReels(data.stoppedReels || [false, false, false]);
       isInstantRef.current = !!data.isInstant;
       setIsInstant(data.isInstant || false);
+      // Mirror the acting device's skill subtraction so the reels resolve to the
+      // same number here as they do on their screen.
+      lastAppliedBonusRef.current = data.skillBonus || 0;
+      currentSpinIdRef.current = Number(data.spinId) || 0;
+      spinStartedAtRef.current = Date.now();
+      setSpinToken((n) => n + 1);
+      if (spinResultTimerRef.current) {
+        clearTimeout(spinResultTimerRef.current);
+        spinResultTimerRef.current = null;
+      }
       setActiveCutinVisible(false);
       setIsZoromeWinner(false);
       stoppedCountRef.current = 0;
@@ -301,19 +353,91 @@ export default function App() {
   const [displaySkillBonus, setDisplaySkillBonus] = useState<number>(0);
   const skillCutinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // applyReelStop is defined later in the body; a ref keeps applyRoomState stable.
+  // Everything applyRoomState calls has to go through a ref: applyRoomState is
+  // memoised, so a handler captured directly would keep the reels/rewrite values
+  // from the render that created it and replay the spin with stale numbers.
   const applyReelStopRef = useRef<(reelIdx: number, isRemote: boolean) => void>(() => {});
   const handleSkillAnnounceRef = useRef<(t: string | null, b: number, r?: boolean) => void>(() => {});
+  const handleExecuteRewriteRef = useRef<(isAuto?: boolean, isRemote?: boolean) => void>(() => {});
+  const handleSendStampRef = useRef<(text: string, sender: string, isRemote?: boolean) => void>(() => {});
+  const handleDisbandRoomRef = useRef<(arg?: unknown) => void>(() => {});
   // De-duplicates round results, which can arrive via both SSE and polling.
   const lastProcessedGameIndexRef = useRef<number>(0);
   const isDisconnectedRef = useRef<boolean>(false);
+  // Skill subtraction that the spin in progress will apply to its result.
+  const lastAppliedBonusRef = useRef<number>(0);
+  // Bumped once per spin. SlotReels resets everything it carries between spins
+  // when this changes, so a spin that ended badly cannot leak into the next one.
+  const [spinToken, setSpinToken] = useState<number>(0);
+  // Spin currently on screen, and the pending "force this result" timer.
+  const currentSpinIdRef = useRef<number>(0);
+  const spinStartedAtRef = useRef<number>(0);
+  const finishRemoteSpinRef = useRef<(data: any) => void>(() => {});
+  const spinResultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastFinishedSpinIdRef = useRef<number>(0);
+
+  /**
+   * Wipes everything the last spin left on the cabinet.
+   *
+   * A round (or set, or new match) used to open showing the previous player's
+   * reels, cut-in and win glow, because only the match bookkeeping was reset and
+   * the slot's own display state was not.
+   */
+  const resetSlotVisuals = useCallback(() => {
+    if (rewriteTimeoutRef.current) {
+      clearTimeout(rewriteTimeoutRef.current);
+      rewriteTimeoutRef.current = null;
+    }
+    if (skillCutinTimerRef.current) {
+      clearTimeout(skillCutinTimerRef.current);
+      skillCutinTimerRef.current = null;
+    }
+    gameStateRef.current = 'idle';
+    setGameState('idle');
+    stoppedCountRef.current = 0;
+    setStoppedCount(0);
+    setRemoteStoppedReels([false, false, false]);
+    setTargetValue(INITIAL_REEL_VALUE);
+    setRealTargetValue(INITIAL_REEL_VALUE);
+    setRewriteTrigger('none');
+    setMismatchType('none');
+    setCurrentEffect(null);
+    setEffectTiming('none');
+    setActiveCutinVisible(false);
+    setIsZoromeWinner(false);
+    setIsButtonLocked(false);
+    setIsBlackout(false);
+    setShowFreezeText(false);
+    isInstantRef.current = false;
+    setIsInstant(false);
+    setIsSkillEffectActive(false);
+    setSkillEffectText(null);
+    setSkillCutinText(null);
+    setDisplaySkillBonus(0);
+    activeSpinRef.current = null;
+    lastAppliedBonusRef.current = 0;
+    currentSpinIdRef.current = 0;
+    setSpinToken((n) => n + 1);
+  }, []);
 
   // Apply state updates received from server stream or polling
   const applyRoomState = useCallback((data: any) => {
     const { roomData, broadcastEvent } = data || {};
-    const isSpinningNow = gameStateRef.current === 'spinning' || gameStateRef.current === 'stopping_1' || gameStateRef.current === 'stopping_2' || gameStateRef.current === 'rewrite_pending';
+    // Room updates are held back while the reels are moving so the screen does not
+    // flicker mid-spin. Bounded by time as well: if a spin never resolves (a lost
+    // message, a player who walked away) this device must not stop accepting
+    // state forever.
+    const spinIsFresh = Date.now() - spinStartedAtRef.current < SPIN_HOLD_MAX_MS;
+    const isSpinningNow = spinIsFresh && (
+      gameStateRef.current === 'spinning' ||
+      gameStateRef.current === 'stopping_1' ||
+      gameStateRef.current === 'stopping_2' ||
+      gameStateRef.current === 'rewrite_pending'
+    );
 
     if (roomData) {
       if (roomData.playerNames) setPlayerNames(roomData.playerNames);
+      if (roomData.connectedDevices) setConnectedDevices(roomData.connectedDevices);
       if (typeof roomData.playerCount === 'number') setPlayerCount(roomData.playerCount);
       if (roomData.matchState) setMatchState(roomData.matchState);
       
@@ -335,7 +459,10 @@ export default function App() {
             startRemoteSpin(spin);
           }
         }
-        if (Array.isArray(spin.stoppedReels)) {
+        if (Array.isArray(spin.stoppedReels) && spin.spinId === currentSpinIdRef.current) {
+          // Reconcile against the room rather than counting events: whatever the
+          // room says is stopped is stopped here too, so a lost STOP_REEL is
+          // repaired by the next state that arrives instead of stalling the reels.
           setRemoteStoppedReels((prev) => {
             const next = [...prev];
             let changed = false;
@@ -348,6 +475,21 @@ export default function App() {
             return changed ? next : prev;
           });
         }
+
+        // The room moved on to a spin this device never saw start (its
+        // TRIGGER_SPIN was lost, or it was asleep). Rather than replay the old
+        // one against new numbers, drop the stale spin and pick up the live one.
+        if (spin.spinId && spin.spinId !== currentSpinIdRef.current && spin.senderId !== myPlayerId) {
+          const localIsStale =
+            gameStateRef.current === 'spinning' ||
+            gameStateRef.current === 'stopping_1' ||
+            gameStateRef.current === 'stopping_2' ||
+            gameStateRef.current === 'rewrite_pending';
+          if (localIsStale) {
+            lastProcessedSpinIdRef.current = spin.spinId;
+            startRemoteSpin(spin);
+          }
+        }
       }
     }
 
@@ -359,13 +501,22 @@ export default function App() {
         }
       } else if (broadcastEvent.type === 'STOP_REEL') {
         const reelIdx = broadcastEvent.reelIdx;
-        if (typeof reelIdx === 'number' && broadcastEvent.senderId !== myPlayerId) {
+        // A stop that belongs to a spin this device is not running would advance
+        // its counters against the wrong reels — which is how one dropped message
+        // used to poison every spin that followed.
+        const belongsToCurrentSpin =
+          !broadcastEvent.spinId || broadcastEvent.spinId === currentSpinIdRef.current;
+        if (typeof reelIdx === 'number' && broadcastEvent.senderId !== myPlayerId && belongsToCurrentSpin) {
           applyReelStopRef.current(reelIdx, true);
         }
+      } else if (broadcastEvent.type === 'SPIN_RESULT' && broadcastEvent.senderId !== myPlayerId) {
+        finishRemoteSpinRef.current(broadcastEvent);
       } else if (broadcastEvent.type === 'EXECUTE_REWRITE' && broadcastEvent.senderId !== myPlayerId) {
-        handleExecuteRewrite(false, true);
+        if (!broadcastEvent.spinId || broadcastEvent.spinId === currentSpinIdRef.current) {
+          handleExecuteRewriteRef.current(false, true);
+        }
       } else if (broadcastEvent.type === 'SEND_STAMP' && broadcastEvent.senderId !== myPlayerId) {
-        handleSendStamp(broadcastEvent.stampText, broadcastEvent.senderName, true);
+        handleSendStampRef.current(broadcastEvent.stampText, broadcastEvent.senderName, true);
       } else if (broadcastEvent.type === 'SKILL_CUTIN') {
         if (broadcastEvent.senderId !== myPlayerId) {
           handleSkillAnnounceRef.current(broadcastEvent.skillText || null, broadcastEvent.skillBonus || 0, true);
@@ -396,16 +547,18 @@ export default function App() {
         }
       } else if (broadcastEvent.type === 'NEXT_ROUND' || broadcastEvent.type === 'NEXT_SET') {
         // Room state itself arrives through roomData; these events just dismiss
-        // the summary popups so every device leaves the screen together.
+        // the summary popups so every device leaves the screen together, and
+        // clear the cabinet so the new round does not open on the old result.
         setIsRoundSummaryOpen(false);
         setIsSetSummaryOpen(false);
         setMatchWinner(null);
         setIsMatchDraw(false);
+        resetSlotVisuals();
       } else if (broadcastEvent.type === 'DISBAND' && broadcastEvent.senderId !== myPlayerId) {
-        handleDisbandRoom(true);
+        handleDisbandRoomRef.current(true);
       }
     }
-  }, [myPlayerId, startRemoteSpin]);
+  }, [myPlayerId, startRemoteSpin, resetSlotVisuals]);
 
   // Manual & automatic reconnect handler that re-syncs state from server
   const fetchRoomState = useCallback(async (isManual = false) => {
@@ -452,7 +605,7 @@ export default function App() {
   // SSE is the primary push channel (near-instant); polling is only a safety net,
   // and it backs off automatically while the stream is healthy.
   useEffect(() => {
-    if (!roomId) return;
+    if (!roomId || !hasJoinedRoom) return;
 
     let closed = false;
     let eventSource: EventSource | null = null;
@@ -508,11 +661,19 @@ export default function App() {
     // 2. Adaptive polling: 1s while the stream is down, 5s while it is healthy
     const schedulePoll = () => {
       if (closed) return;
+      // While the reels are moving this is the safety net that catches a dropped
+      // push, so it tightens up for exactly as long as that matters.
+      const spinInProgress =
+        gameStateRef.current === 'spinning' ||
+        gameStateRef.current === 'stopping_1' ||
+        gameStateRef.current === 'stopping_2' ||
+        gameStateRef.current === 'rewrite_pending';
+      const delay = spinInProgress ? 900 : sseHealthy ? 4000 : 1000;
       pollTimer = setTimeout(async () => {
         if (closed) return;
         await fetchRoomStateRef.current();
         schedulePoll();
-      }, sseHealthy ? 5000 : 1000);
+      }, delay);
     };
     schedulePoll();
 
@@ -542,7 +703,7 @@ export default function App() {
       if (eventSource) eventSource.close();
       if (bc) bc.close();
     };
-  }, [roomId]);
+  }, [roomId, hasJoinedRoom]);
 
   // Keep this device's seat reserved.
   // The server frees a slot that has gone quiet, and it only counts writes — but
@@ -550,7 +711,7 @@ export default function App() {
   // long turn therefore lost their seat, and on their next action came back
   // under a different player number (taking over somebody else's turn).
   useEffect(() => {
-    if (!roomId) return;
+    if (!roomId || !hasJoinedRoom) return;
 
     const sendKeepalive = () => {
       if (activeViewRef.current !== 'match') return;
@@ -562,6 +723,7 @@ export default function App() {
           deviceRegistration: {
             deviceId,
             playerName: userNameInputRef.current.trim() || 'プレイヤー',
+            inLobby: matchStateRef.current === 'lobby',
           },
         }),
       }).catch(() => {});
@@ -579,7 +741,7 @@ export default function App() {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [roomId, deviceId]);
+  }, [roomId, deviceId, hasJoinedRoom]);
 
   // Compute rotation order names for current round in set
   const turnOrderNames = useMemo(() => {
@@ -600,6 +762,39 @@ export default function App() {
   const activeMatchPlayer = matchPlayers[activePlayerIndex];
   const isMyTurnInMatch = activeMatchPlayer ? activeMatchPlayer.id === myPlayerId : true;
 
+  // Nobody starts until every device that joined is actually on the lobby screen,
+  // so a player who is still typing their name cannot be left out of the roster.
+  const lobbyDevices = Object.values(connectedDevices);
+  const lobbyReadyCount = lobbyDevices.filter((d) => d.inLobby).length;
+  const lobbyTotalCount = lobbyDevices.length;
+  const canLaunchGame = lobbyTotalCount > 0 && lobbyReadyCount === lobbyTotalCount;
+
+  // The rewrite PUSH belongs to whoever is spinning. Spectators mirror the
+  // overlay so they see the same tension, but the button stays dead for them —
+  // `handleExecuteRewrite` already refused their press, which just read as a
+  // broken button.
+  const canPressRewrite = activeView !== 'match' || isMyTurnInMatch;
+
+  // Brief "あなたの番です" banner the moment the turn lands on this device.
+  const [showYourTurnBanner, setShowYourTurnBanner] = useState<boolean>(false);
+  const wasMyTurnRef = useRef<boolean>(false);
+  useEffect(() => {
+    const isMine = activeView === 'match' && matchState === 'playing' && !!activeMatchPlayer && isMyTurnInMatch;
+    // Only announce the transition into your turn, not every re-render while it
+    // is still yours.
+    if (isMine && !wasMyTurnRef.current) {
+      setShowYourTurnBanner(true);
+      playYourTurnSound();
+      const timer = setTimeout(() => setShowYourTurnBanner(false), 900);
+      wasMyTurnRef.current = true;
+      return () => clearTimeout(timer);
+    }
+    if (!isMine) {
+      wasMyTurnRef.current = false;
+      setShowYourTurnBanner(false);
+    }
+  }, [activeView, matchState, activeMatchPlayer, isMyTurnInMatch]);
+
   const currentSkillCost =
     skillSelection.minus20Count * 1 +
     (skillSelection.minus40Selected ? 3 : 0) +
@@ -615,6 +810,8 @@ export default function App() {
     const targetRoom = customRoomInput.trim() || 'GLOBAL_LOBBY';
     try { localStorage.setItem('slot_last_room', targetRoom); localStorage.setItem('slot_last_name', userNameInput || ''); } catch {}
     setRoomId(targetRoom);
+    // The ref has to lead the state so the sync calls below reach `targetRoom`.
+    roomIdRef.current = targetRoom;
 
     let currentNames: string[] = [];
     let assignedSlot = 1;
@@ -630,6 +827,7 @@ export default function App() {
           deviceRegistration: {
             deviceId,
             playerName: userNameInput.trim() || 'プレイヤー',
+            inLobby: true,
           },
         }),
       });
@@ -649,13 +847,14 @@ export default function App() {
       // ignore
     }
 
-    const myName = userNameInput.trim() || `プレイヤー${assignedSlot}`;
-
     // The roster is derived from devices that have actually joined, so an empty
     // room shows one row (you), not a fixed set of placeholder players.
     // The server owns the roster now (it rebuilds it from registered devices),
     // so the client simply registers itself and uses whatever comes back.
     setMyPlayerId(assignedSlot);
+    // Now that this device holds a slot, it may subscribe to the room and start
+    // holding its seat.
+    setHasJoinedRoom(true);
 
     // A match already in progress must not be dragged back to the lobby just
     // because somebody opened the URL. Join the running match instead.
@@ -683,20 +882,26 @@ export default function App() {
     const validNames = roster.map((entry) => entry.name);
     const count = Math.max(1, roster.length);
 
-    const initialPlayers: MatchPlayer[] = roster.map(({ name, slot }) => ({
-      id: slot,
-      name: name || `プレイヤー${slot}`,
-      points: 5,
-      rawScore: null,
-      currentScore: null,
-      hasPassed: false,
-      usedAll5Points: false,
-      skillsActive: { minus5Active: false },
-      spinCount: 0,
-      history: [],
-      totalMatchPoints: 0,
-      winCount: 0,
-    }));
+    // The room tally runs for the whole session — from joining until the session
+    // is ended from the stats screen — so starting another match carries the
+    // running totals over instead of zeroing them.
+    const initialPlayers: MatchPlayer[] = roster.map(({ name, slot }) => {
+      const carried = matchPlayers.find((p) => p.id === slot);
+      return {
+        id: slot,
+        name: name || `プレイヤー${slot}`,
+        points: 5,
+        rawScore: null,
+        currentScore: null,
+        hasPassed: false,
+        usedAll5Points: false,
+        skillsActive: { minus5Active: false },
+        spinCount: 0,
+        history: [],
+        totalMatchPoints: carried?.totalMatchPoints ?? 0,
+        winCount: carried?.winCount ?? 0,
+      };
+    });
 
     setPlayerCount(count);
     setMatchPlayers(initialPlayers);
@@ -705,14 +910,12 @@ export default function App() {
     setCurrentRoundInSet(1);
     setIsRoundSummaryOpen(false);
     setIsSetSummaryOpen(false);
-    setTotalGamesCount(0);
-    setGameHistory([]);
-    setSetRecords([]);
     setLastGameRecord(null);
     setMatchState('playing');
     setMatchWinner(null);
     setIsMatchDraw(false);
     setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false });
+    resetSlotVisuals();
 
     syncRoomStateToServer({
       playerCount: count,
@@ -752,6 +955,9 @@ export default function App() {
       );
     }
     lastProcessedGameIndexRef.current = 0;
+    // Back on the entry screen this device is no longer a participant: stop
+    // subscribing to the room and stop holding a slot until it joins again.
+    setHasJoinedRoom(false);
     setMatchState('setup');
     setMatchPlayers([]);
     setActivePlayerIndex(0);
@@ -789,6 +995,7 @@ export default function App() {
     setIsRoundSummaryOpen(false);
     setMatchWinner(null);
     setIsMatchDraw(false);
+    resetSlotVisuals();
 
     if (activeView === 'match') {
       syncRoomStateToServer(
@@ -834,6 +1041,7 @@ export default function App() {
     setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false });
     setIsSetSummaryOpen(false);
     setMatchState('playing');
+    resetSlotVisuals();
 
     if (activeView === 'match') {
       syncRoomStateToServer(
@@ -896,13 +1104,20 @@ export default function App() {
         } else {
           pointChanges[primaryWinner.id] = { pointsEarned: W, isWinner: true, isZoromeBonus: false };
 
+          // Losers pay in whole 100s so the table reads cleanly. Everyone but the
+          // last is rounded to the nearest 100 and the last absorbs the rest —
+          // since W is itself a multiple of 100, that remainder is one too, and
+          // the payments still add up to exactly what the winner receives.
           let assignedPenalty = 0;
           diffs.forEach((d, idx) => {
             if (idx === diffs.length - 1) {
               const remaining = W - assignedPenalty;
               pointChanges[d.id] = { pointsEarned: -remaining, isWinner: false, isZoromeBonus: false };
             } else {
-              const pen = Math.round(W * (d.diff / totalDiff));
+              const exact = W * (d.diff / totalDiff);
+              // Clamp so the rounding can never push the final share negative.
+              const maxForThis = W - assignedPenalty;
+              const pen = Math.min(maxForThis, Math.max(0, Math.round(exact / PENALTY_STEP) * PENALTY_STEP));
               assignedPenalty += pen;
               pointChanges[d.id] = { pointsEarned: -pen, isWinner: false, isZoromeBonus: false };
             }
@@ -957,6 +1172,7 @@ export default function App() {
     const record: MatchGameRecord = {
       gameIndex: nextGameIdx,
       setIndex: currentSetIndex,
+      roundInSet: currentRoundInSet,
       results: finalPlayers.map((p) => {
         const change = pointChanges[p.id] || { pointsEarned: 0, isWinner: false, isZoromeBonus: false };
         return {
@@ -1049,6 +1265,7 @@ export default function App() {
 
   const handlePassPlayer = () => {
     if (activeView !== 'match' || matchState !== 'playing' || !activeMatchPlayer) return;
+    playConfirmScoreSound();
 
     const updated = matchPlayers.map((p, idx) => {
       if (idx === activePlayerIndex) {
@@ -1083,8 +1300,6 @@ export default function App() {
       setTimeout(() => evaluateMatchAndFinish(updated), 50);
     }
   };
-
-  const lastAppliedBonusRef = useRef<number>(0);
 
   // State A: Normal Lever ON / Manual Spin Start
   const triggerNormalSpin = () => {
@@ -1133,6 +1348,9 @@ export default function App() {
       setDisplaySkillBonus(0);
 
       const spinId = Date.now();
+      currentSpinIdRef.current = spinId;
+      spinStartedAtRef.current = Date.now();
+      setSpinToken((n) => n + 1);
       setRemoteStoppedReels([false, false, false]);
       const spinData = {
         spinId,
@@ -1143,6 +1361,9 @@ export default function App() {
         rewriteTrigger: result.rewriteTrigger,
         timing: result.timing,
         isInstant: false,
+        // Travels with the spin so spectators land on the same final number
+        // instead of stopping on the value before the skill was subtracted.
+        skillBonus: appliedBonus,
         stoppedReels: [false, false, false],
         senderId: myPlayerId,
         timestamp: Date.now(),
@@ -1241,6 +1462,9 @@ export default function App() {
       const instantPlayers = matchPlayers;
 
       const spinId = Date.now();
+      currentSpinIdRef.current = spinId;
+      spinStartedAtRef.current = Date.now();
+      setSpinToken((n) => n + 1);
       setRemoteStoppedReels([true, true, true]);
       const spinData = {
         spinId,
@@ -1336,7 +1560,7 @@ export default function App() {
       }
       syncRoomStateToServer(
         updatedSpin ? { activeSpin: updatedSpin } : null,
-        { type: 'STOP_REEL', reelIdx, senderId: myPlayerId }
+        { type: 'STOP_REEL', reelIdx, senderId: myPlayerId, spinId: currentSpinIdRef.current }
       );
     }
 
@@ -1363,7 +1587,12 @@ export default function App() {
       setGameState('stopping_2');
       checkFreezeOrCutin('stop_2');
 
-      if (isZoromeVal(realTargetValue)) {
+      // Celebrate early only when the reels are already showing the real result.
+      // With a rewrite pending, `realTargetValue` is the hidden value behind the
+      // dummy, so this used to fire the zorome fanfare on spins that never landed
+      // on a zorome. A skill subtraction can move the result off a zorome too.
+      const willLandOnRealValue = rewriteTrigger === 'none' && lastAppliedBonusRef.current === 0;
+      if (willLandOnRealValue && isZoromeVal(realTargetValue)) {
         setIsZoromeWinner(true);
         playZoromeVictorySound();
         setIsScreenShaking(true);
@@ -1374,6 +1603,8 @@ export default function App() {
 
   applyReelStopRef.current = applyReelStop;
   handleSkillAnnounceRef.current = handleSkillAnnounce;
+  handleSendStampRef.current = handleSendStamp;
+  handleDisbandRoomRef.current = handleDisbandRoom;
 
   const handleReelStop = (reelIdx: number) => {
     if (isInstant) return;
@@ -1407,6 +1638,7 @@ export default function App() {
       syncRoomStateToServer(null, {
         type: 'EXECUTE_REWRITE',
         senderId: myPlayerId,
+        spinId: currentSpinIdRef.current,
       });
     }
 
@@ -1433,19 +1665,65 @@ export default function App() {
       resolveFinalValue(targetValue);
     }
   };
+  handleExecuteRewriteRef.current = handleExecuteRewrite;
+
+  /**
+   * Lands this screen on the result the acting device published.
+   *
+   * The normal path (three STOP_REEL messages, then EXECUTE_REWRITE) is what
+   * produces the nice staggered stop, so this waits a moment and only steps in if
+   * the reels are still turning — which is what happens when one of those
+   * messages never arrived.
+   */
+  const finishRemoteSpin = (data: any) => {
+    const spinId = Number(data?.spinId) || 0;
+    if (spinId && spinId === lastFinishedSpinIdRef.current) return;
+    lastFinishedSpinIdRef.current = spinId;
+
+    if (spinResultTimerRef.current) clearTimeout(spinResultTimerRef.current);
+    spinResultTimerRef.current = setTimeout(() => {
+      spinResultTimerRef.current = null;
+      const stillSpinning =
+        gameStateRef.current === 'spinning' ||
+        gameStateRef.current === 'stopping_1' ||
+        gameStateRef.current === 'stopping_2' ||
+        gameStateRef.current === 'rewrite_pending';
+      if (!stillSpinning) return;
+
+      // The rewrite already played out on the acting device; replaying it here
+      // would only re-open the PUSH overlay, so drop straight to the result.
+      setRewriteTrigger('none');
+      lastAppliedBonusRef.current = Number(data?.skillBonus) || 0;
+      const finalValue = Number(data?.finalValue);
+      if (Number.isFinite(finalValue)) {
+        setTargetValue(finalValue);
+        setRealTargetValue(finalValue);
+      }
+      stoppedCountRef.current = 3;
+      setStoppedCount(3);
+      setRemoteStoppedReels([true, true, true]);
+      resolveFinalValue(Number.isFinite(finalValue) ? finalValue : targetValue);
+    }, SPIN_RESULT_FALLBACK_MS);
+  };
+  finishRemoteSpinRef.current = finishRemoteSpin;
 
   const resolveFinalValue = (finalVal: number) => {
     setGameState('completed');
     setIsButtonLocked(false);
 
+    // The score that actually counts is the one after skills are subtracted, and
+    // that is what decides the zorome bonus — so the celebration has to judge the
+    // same number. Outside match mode there is no subtraction and this is finalVal.
+    const scoredValue = finalVal - lastAppliedBonusRef.current;
+
     // Play victory music depending on scale
     let winningTier: 'under_100' | 'under_50' | 'under_30' | 'under_10' | 'none' = 'none';
-    if (finalVal <= 10) winningTier = 'under_10';
-    else if (finalVal <= 30) winningTier = 'under_30';
-    else if (finalVal <= 50) winningTier = 'under_50';
-    else if (finalVal <= 100) winningTier = 'under_100';
+    if (scoredValue <= 10) winningTier = 'under_10';
+    else if (scoredValue <= 30) winningTier = 'under_30';
+    else if (scoredValue <= 50) winningTier = 'under_50';
+    else if (scoredValue <= 100) winningTier = 'under_100';
 
-    if (isZoromeVal(finalVal)) {
+    if (isZoromeVal(scoredValue)) {
       setIsZoromeWinner(true);
       if (!isZoromeWinner) {
         playZoromeVictorySound();
@@ -1471,35 +1749,38 @@ export default function App() {
       setHistory(prev => [historyItem, ...prev].slice(0, 50)); // limit history size to 50
     }
 
+    const bonusMinus = lastAppliedBonusRef.current;
+    const rawVal = finalVal;
+    // No floor: skills are allowed to push the score below zero, which is what
+    // makes the "マイナス値で勝利 +4000pt" rule reachable.
+    const effectiveVal = finalVal - bonusMinus;
+
+    // The skill subtraction is presentation, so it runs on every screen watching
+    // the spin — the acting device broadcasts the bonus with the spin. Keeping it
+    // inside the scoring block below left spectators parked on the pre-skill
+    // number while the player saw the real one.
+    if (!isInstantRef.current && activeView === 'match' && bonusMinus > 0) {
+      setIsSkillEffectActive(true);
+      setSkillEffectText(`⚡ スキル減算発動中！ 【${rawVal}】`);
+
+      // ① リールが停止(rawVal) ➔ ② 700ms後に減算演出＆音でリールの数値をスキル適用後(effectiveVal)に変化！
+      setTimeout(() => {
+        playRewriteSuccessSound();
+        setTargetValue(effectiveVal);
+        setSkillEffectText(`⚡ スキル適用完了！ 【${rawVal}】 ➔ (-${bonusMinus}) ➔ 【${effectiveVal}】`);
+      }, 700);
+
+      setTimeout(() => {
+        setIsSkillEffectActive(false);
+        setSkillEffectText(null);
+      }, 3200);
+    }
+
     // Match Mode state update on spin resolve
     // 空回転 (⚡乱数調整) never produces a score, so the match state is left untouched.
-    // Spectating devices replay the same reels but must NOT score: their
-    // lastAppliedBonusRef belongs to their own last spin, so letting them write
-    // would push a score with the wrong skill subtraction and clobber the real one.
+    // Spectating devices replay the same reels but must NOT score: only the
+    // acting device owns the roster write for its own turn.
     if (!isInstantRef.current && isMyTurnInMatch && activeView === 'match' && matchState === 'playing' && activeMatchPlayer) {
-      const bonusMinus = lastAppliedBonusRef.current;
-      const rawVal = finalVal;
-      // No floor: skills are allowed to push the score below zero, which is what
-      // makes the "マイナス値で勝利 +4000pt" rule reachable.
-      const effectiveVal = finalVal - bonusMinus;
-
-      if (bonusMinus > 0) {
-        setIsSkillEffectActive(true);
-        setSkillEffectText(`⚡ スキル減算発動中！ 【${rawVal}】`);
-        
-        // ① リールが停止(rawVal) ➔ ② 700ms後に減算演出＆音でリールの数値をスキル適用後(effectiveVal)に変化！
-        setTimeout(() => {
-          playRewriteSuccessSound();
-          setTargetValue(effectiveVal);
-          setSkillEffectText(`⚡ スキル適用完了！ 【${rawVal}】 ➔ (-${bonusMinus}) ➔ 【${effectiveVal}】`);
-        }, 700);
-
-        setTimeout(() => {
-          setIsSkillEffectActive(false);
-          setSkillEffectText(null);
-        }, 3200);
-      }
-
       const updated = matchPlayers.map((p, idx) => {
         if (idx === activePlayerIndex) {
           const autoPass = p.points <= 0;
@@ -1533,11 +1814,22 @@ export default function App() {
 
       setMatchPlayers(updated);
 
-      syncRoomStateToServer({
-        matchPlayers: updated,
-        activePlayerIndex: nextIdx,
-        matchState: 'playing',
-      });
+      syncRoomStateToServer(
+        {
+          matchPlayers: updated,
+          activePlayerIndex: nextIdx,
+          matchState: 'playing',
+        },
+        // One authoritative "this spin ended on X" so a spectator that missed a
+        // reel-stop message still converges instead of spinning forever.
+        {
+          type: 'SPIN_RESULT',
+          senderId: myPlayerId,
+          spinId: currentSpinIdRef.current,
+          finalValue: rawVal,
+          skillBonus: bonusMinus,
+        }
+      );
 
       if (allDone) {
         setTimeout(() => evaluateMatchAndFinish(updated), 100);
@@ -1552,8 +1844,17 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between p-2 sm:p-6 font-sans antialiased relative overflow-x-hidden selection:bg-pink-500 selection:text-white" id="slot-rng-app">
       {/* Absolute Ambient Neon BG Glows */}
-      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-500/10 blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-pink-500/10 blur-[120px] pointer-events-none" />
+      {/* Ambient glow as a painted gradient rather than two blur filters.
+          A 120px blur over half the viewport is re-rasterised every frame on iOS
+          and was costing frames continuously, for a barely visible 10% tint. */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background:
+            'radial-gradient(closest-side at 15% 10%, rgba(99,102,241,0.10), transparent 100%),' +
+            'radial-gradient(closest-side at 85% 90%, rgba(236,72,153,0.10), transparent 100%)',
+        }}
+      />
 
       {/* Header Bar */}
       <header className="flex justify-between items-center max-w-5xl w-full mx-auto border-b border-slate-900 pb-1.5 z-10">
@@ -1563,10 +1864,10 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-base sm:text-xl font-display font-black tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-amber-300 via-amber-400 to-emerald-400">
-              数字スロット 777
+              うんちゲーム💩 777
             </h1>
             <p className="hidden sm:block text-[10px] uppercase font-mono tracking-widest text-amber-400/80 font-bold">
-              Number Slot 777
+              Unchi Game 777
             </p>
           </div>
         </div>
@@ -1640,6 +1941,25 @@ export default function App() {
       {/* Main Game Stage Layout */}
       <main className="flex-1 flex flex-col items-center justify-center max-w-5xl w-full mx-auto relative z-10 py-4 sm:py-6 overflow-hidden">
         
+        {/* "Your turn" announcement — fires once when the turn reaches this device */}
+        <AnimatePresence>
+          {showYourTurnBanner && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.7 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.85 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 18 }}
+              className="fixed top-2 left-1/2 -translate-x-1/2 z-[200] pointer-events-none"
+            >
+              <div className="px-4 py-1.5 rounded-full bg-emerald-500/95 border border-emerald-200 shadow-[0_4px_20px_rgba(16,185,129,0.5)]">
+                <span className="text-sm font-display font-black text-white tracking-widest whitespace-nowrap">
+                  あなたの番です
+                </span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Skill Reduction Visual Banner Overlay */}
         <AnimatePresence>
           {isSkillEffectActive && skillEffectText && (
@@ -1864,6 +2184,10 @@ export default function App() {
                           onSendStamp={handleSendStamp}
                           onTriggerNormalSpin={triggerNormalSpin}
                           onTriggerInstantSpin={triggerInstantSpin}
+                          onShowStats={() => setIsStatsOpen(true)}
+                          canLaunchGame={canLaunchGame}
+                          lobbyReadyCount={lobbyReadyCount}
+                          lobbyTotalCount={lobbyTotalCount}
                         />
                       </div>
                     ) : (
@@ -2003,6 +2327,10 @@ export default function App() {
                           onSendStamp={handleSendStamp}
                           onTriggerNormalSpin={triggerNormalSpin}
                           onTriggerInstantSpin={triggerInstantSpin}
+                          onShowStats={() => setIsStatsOpen(true)}
+                          canLaunchGame={canLaunchGame}
+                          lobbyReadyCount={lobbyReadyCount}
+                          lobbyTotalCount={lobbyTotalCount}
                         />
                       </div>
                     )}
@@ -2028,6 +2356,7 @@ export default function App() {
                         activePlayerScore={activeMatchPlayer?.currentScore ?? null}
                         hasConsumedPointsThisTurn={activeMatchPlayer?.hasConsumedPointsThisTurn ?? false}
                         remoteStoppedReels={activeView === 'match' ? remoteStoppedReels : undefined}
+                        spinToken={spinToken}
                       />
 
                       {/* Rewrite PUSH button overlay */}
@@ -2048,10 +2377,15 @@ export default function App() {
                               </div>
                               <motion.button
                                 onClick={() => handleExecuteRewrite(false)}
-                                whileHover={{ scale: 1.08 }}
-                                whileTap={{ scale: 0.92 }}
-                                className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-gradient-to-b from-purple-600 via-rose-700 to-slate-900 border-4 border-amber-300 text-white font-display font-black shadow-[0_0_35px_rgba(168,85,247,0.8),inset_0_4px_12px_rgba(255,255,255,0.4)] flex flex-col justify-center items-center cursor-pointer active:brightness-110 group animate-bounce"
-                                style={{ animationDuration: '0.9s' }}
+                                disabled={!canPressRewrite}
+                                whileHover={canPressRewrite ? { scale: 1.08 } : undefined}
+                                whileTap={canPressRewrite ? { scale: 0.92 } : undefined}
+                                className={`relative w-28 h-28 sm:w-32 sm:h-32 rounded-full border-4 text-white font-display font-black flex flex-col justify-center items-center group ${
+                                  canPressRewrite
+                                    ? 'bg-gradient-to-b from-purple-600 via-rose-700 to-slate-900 border-amber-300 shadow-[0_0_35px_rgba(168,85,247,0.8),inset_0_4px_12px_rgba(255,255,255,0.4)] cursor-pointer active:brightness-110 animate-bounce'
+                                    : 'bg-gradient-to-b from-slate-700 via-slate-800 to-slate-900 border-slate-600 opacity-60 cursor-not-allowed'
+                                }`}
+                                style={canPressRewrite ? { animationDuration: '0.9s' } : undefined}
                                 id="mock-push-btn"
                               >
                                 <span className="text-3xl mb-0.5 filter drop-shadow-md">😏</span>
@@ -2062,25 +2396,34 @@ export default function App() {
                                   50% OVER 400!?
                                 </span>
                               </motion.button>
-                              <p className="text-[10px] sm:text-xs font-bold text-rose-300 mt-2.5 text-center font-sans animate-pulse">
-                                「フッ… 99以下で満足か…？」ボタンを押せ！
+                              <p className={`text-[10px] sm:text-xs font-bold mt-2.5 text-center font-sans ${canPressRewrite ? 'text-rose-300 animate-pulse' : 'text-slate-400'}`}>
+                                {canPressRewrite
+                                  ? '「フッ… 99以下で満足か…？」ボタンを押せ！'
+                                  : `${activeMatchPlayer?.name ?? '手番のプレイヤー'} がPUSHするのを待っています…`}
                               </p>
                             </>
                           ) : (
                             <>
                               <motion.button
                                 onClick={() => handleExecuteRewrite(false)}
-                                whileHover={{ scale: 1.08 }}
-                                whileTap={{ scale: 0.92 }}
-                                className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-gradient-to-b from-red-500 via-rose-600 to-red-800 border-4 border-amber-400 text-white font-display font-black text-2xl tracking-widest shadow-[0_0_30px_rgba(239,68,68,0.8),inset_0_4px_12px_rgba(255,255,255,0.4)] flex flex-col justify-center items-center cursor-pointer active:brightness-110 group animate-pulse"
-                                style={{ animationDuration: '0.8s' }}
+                                disabled={!canPressRewrite}
+                                whileHover={canPressRewrite ? { scale: 1.08 } : undefined}
+                                whileTap={canPressRewrite ? { scale: 0.92 } : undefined}
+                                className={`relative w-28 h-28 sm:w-32 sm:h-32 rounded-full border-4 text-white font-display font-black text-2xl tracking-widest flex flex-col justify-center items-center group ${
+                                  canPressRewrite
+                                    ? 'bg-gradient-to-b from-red-500 via-rose-600 to-red-800 border-amber-400 shadow-[0_0_30px_rgba(239,68,68,0.8),inset_0_4px_12px_rgba(255,255,255,0.4)] cursor-pointer active:brightness-110 animate-pulse'
+                                    : 'bg-gradient-to-b from-slate-700 via-slate-800 to-slate-900 border-slate-600 opacity-60 cursor-not-allowed'
+                                }`}
+                                style={canPressRewrite ? { animationDuration: '0.8s' } : undefined}
                                 id="rewrite-push-btn"
                               >
                                 <span className="block text-2xl drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] font-bold">PUSH</span>
                                 <span className="text-[8px] font-mono tracking-wider opacity-90 mt-0.5">CHANCE</span>
                               </motion.button>
-                              <p className="text-[10px] sm:text-xs font-bold text-amber-400 mt-3 font-sans animate-pulse">
-                                ボタンプッシュで書き換えに挑戦！
+                              <p className={`text-[10px] sm:text-xs font-bold mt-3 font-sans ${canPressRewrite ? 'text-amber-400 animate-pulse' : 'text-slate-400'}`}>
+                                {canPressRewrite
+                                  ? 'ボタンプッシュで書き換えに挑戦！'
+                                  : `${activeMatchPlayer?.name ?? '手番のプレイヤー'} がPUSHするのを待っています…`}
                               </p>
                             </>
                           )}
@@ -2162,6 +2505,10 @@ export default function App() {
                           onSendStamp={handleSendStamp}
                           onTriggerNormalSpin={triggerNormalSpin}
                           onTriggerInstantSpin={triggerInstantSpin}
+                          onShowStats={() => setIsStatsOpen(true)}
+                          canLaunchGame={canLaunchGame}
+                          lobbyReadyCount={lobbyReadyCount}
+                          lobbyTotalCount={lobbyTotalCount}
                         />
                       )}
                     </div>
@@ -2448,11 +2795,12 @@ export default function App() {
         onDisbandRoom={handleDisbandRoom}
         currentSetIndex={currentSetIndex}
         lastGameRecord={lastGameRecord}
+        gameHistory={gameHistory}
         players={matchPlayers}
         winner={matchWinner}
         isDraw={isMatchDraw}
-                onShowStats={() => setIsStatsOpen(true)}
-        />
+        onShowStats={() => setIsStatsOpen(true)}
+      />
 
       {/* Flying Reaction Stamps Overlay */}
       <div className="fixed inset-0 pointer-events-none z-[9999] overflow-hidden">
@@ -2463,9 +2811,12 @@ export default function App() {
               initial={{ opacity: 0, y: '85vh', scale: 0.6 }}
               animate={{ opacity: 1, y: '25vh', scale: 1.15 }}
               exit={{ opacity: 0, y: '10vh', scale: 0.8 }}
-              transition={{ duration: 2.5, ease: 'easeOut' }}
-              style={{ left: `${stamp.x}%` }}
-              className="absolute bg-gradient-to-r from-amber-500 via-rose-500 to-purple-600 text-white font-black text-xs sm:text-sm px-4 py-2 rounded-2xl shadow-[0_0_25px_rgba(245,158,11,0.6)] border-2 border-yellow-300 flex items-center gap-2 backdrop-blur-md"
+              transition={{ duration: 1.8, ease: 'easeOut' }}
+              style={{ left: `${stamp.x}%`, willChange: 'transform, opacity' }}
+              // No backdrop-blur here: several of these animate at once and a
+              // moving blur layer is what locked up Safari on iPhone. The
+              // gradient is opaque anyway, so nothing is lost.
+              className="absolute bg-gradient-to-r from-amber-500 via-rose-500 to-purple-600 text-white font-black text-xs sm:text-sm px-4 py-2 rounded-2xl shadow-lg border-2 border-yellow-300 flex items-center gap-2"
             >
               <span className="text-yellow-300 font-mono font-bold text-[10px] bg-black/50 px-2 py-0.5 rounded-lg border border-yellow-400/30">
                 {stamp.sender}

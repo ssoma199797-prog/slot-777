@@ -771,6 +771,50 @@ export const playButtonUnlockSound = () => {
   osc2.stop(now + 0.2);
 };
 
+// 9-b. 数値確定音 (Two-note descending chime: "決まった" feel)
+export const playConfirmScoreSound = () => {
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  [
+    { freq: 880, at: 0, dur: 0.16 },
+    { freq: 587.33, at: 0.11, dur: 0.34 },
+  ].forEach(({ freq, at, dur }) => {
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq, now + at);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now + at);
+    gain.gain.exponentialRampToValueAtTime(0.26, now + at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + at + dur);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now + at);
+    osc.stop(now + at + dur + 0.02);
+  });
+};
+
+// 9-c. 手番通知音 (Short bright arpeggio announcing "your turn")
+export const playYourTurnSound = () => {
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  [659.25, 830.61, 987.77].forEach((freq, i) => {
+    const at = i * 0.075;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, now + at);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now + at);
+    gain.gain.exponentialRampToValueAtTime(0.22, now + at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + at + 0.26);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now + at);
+    osc.stop(now + at + 0.28);
+  });
+};
+
 // 10. 3rd停止時書き換えあおり音 (Rising frequency tensional sweep)
 export const playRewriteTriggerSound = () => {
   const ctx = getAudioContext();

@@ -84,17 +84,17 @@ export default function SlotLever({ onTrigger, disabled, compact = false }: Slot
           <motion.div 
             style={{ y: ballY }}
             onClick={handleTap}
-            className={`rounded-full relative flex flex-col items-center justify-center shadow-[0_8px_16px_rgba(0,0,0,0.5),inset_0_-8px_16px_rgba(0,0,0,0.4),inset_0_8px_16px_rgba(255,255,255,0.4)] border border-amber-700 transition-all duration-200 cursor-pointer ${
+            className={`rounded-full relative flex flex-col items-center justify-center shadow-[0_8px_16px_rgba(0,0,0,0.5),inset_0_-8px_16px_rgba(0,0,0,0.4),inset_0_8px_16px_rgba(255,255,255,0.4)] border border-red-800 transition-all duration-200 cursor-pointer ${
               compact ? 'w-16 h-16' : 'w-20 h-20'
             } ${
               disabled 
-                ? 'bg-gradient-to-b from-amber-900 to-amber-950 shadow-none' 
-                : 'bg-gradient-to-b from-amber-300 via-amber-500 to-amber-700 hover:scale-105 active:scale-95'
+                ? 'bg-gradient-to-b from-red-950 to-slate-950 shadow-none' 
+                : 'bg-gradient-to-b from-red-400 via-red-600 to-red-800 hover:scale-105 active:scale-95'
             }`}
           >
             {/* Highlight Flare */}
             <div className="absolute top-1.5 left-2 w-3 h-3 rounded-full bg-white/40 blur-xs pointer-events-none" />
-            <span className="text-[8px] font-black text-amber-950 font-mono tracking-tighter drop-shadow-sm select-none">
+            <span className="text-[8px] font-black text-red-50 font-mono tracking-tighter drop-shadow-sm select-none">
               LEVER
             </span>
           </motion.div>

@@ -194,6 +194,14 @@ export interface LotteryResult {
 export const STRICT_UNIFORM_DISTRIBUTION = true;
 
 /**
+ * How often a low result (100以下) shows a 違和感演出 instead of a cut-in.
+ *
+ * Mismatches deliberately silence the normal cut-in, so this is what actually
+ * caps the cut-in rate on two-digit results — lower it to see more cut-ins.
+ */
+export const MISMATCH_RATE = 0.32;
+
+/**
  * Cryptographically strong random float in [0, 1).
  * Falls back to Math.random() only if the Web Crypto API is unavailable.
  */
@@ -325,7 +333,7 @@ export const performLottery = (
       if (r < p_success) {
         rewriteTrigger = 'success';
         initialValue = validOver200[Math.floor(secureRandom() * N_over200)];
-      } else if (r < p_success + 0.55) {
+      } else if (r < p_success + MISMATCH_RATE) {
         const mismatches: MismatchType[] = [
           'button_lock', 
           'lever_silence', 
@@ -400,7 +408,9 @@ export const performLottery = (
         pool = [...HOT_EFFECTS]; // Small chance of overhyping with "激アツ"
       }
     } else if (baseLevel === 'under_100') {
-      const chanceTrigger = cutinFrequency === 'high' ? 0.98 : cutinFrequency === 'low' ? 0.75 : 0.90;
+      // Two-digit results are the ones players care about, so they almost always
+      // get a cut-in; 30以下・50以下 are already guaranteed above.
+      const chanceTrigger = cutinFrequency === 'high' ? 1 : cutinFrequency === 'low' ? 0.88 : 0.97;
       isCutinTriggered = secureRandom() < chanceTrigger;
       if (isCutinTriggered) {
         const randPool = secureRandom();

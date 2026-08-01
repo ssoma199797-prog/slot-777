@@ -1,5 +1,7 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { MatchPlayer, MatchGameRecord, MatchSetRecord } from '../types';
+import { aggregateAllSets, aggregateSession, rankSet, rankLabel } from '../utils/stats';
 import { Trophy, BarChart3, Clock, X, Award, Flame, Users, RefreshCw } from 'lucide-react';
 import { motion } from 'motion/react';
 
@@ -25,10 +27,20 @@ export default function MatchStatsModal({
   if (!isOpen) return null;
 
   // Sort players by totalMatchPoints descending
-  const rankedPlayers = [...players].sort((a, b) => b.totalMatchPoints - a.totalMatchPoints);
+  // Derived from the game log so it cannot disagree with the per-game records.
+  const setAggregates = aggregateAllSets(gameHistory);
+  // The session total is the sum of every set, so it is summed from the same log
+  // rather than read off the players — the two can only ever agree this way.
+  const sessionRanking = rankSet(aggregateSession(gameHistory));
+  const livePlayers = new Map(players.map((p) => [p.id, p]));
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+  // Rendered into <body>: these panels sit inside the cabinet, whose animated
+  // ancestors create stacking contexts that trapped a fixed overlay behind the
+  // game screen no matter how high its z-index was.
+  return createPortal(
+    // Above the round/set summaries (z-[10005]): the tally is opened *from* those
+    // screens, so at z-50 it rendered behind them and looked like nothing happened.
+    <div className="fixed inset-0 z-[10020] flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-md animate-fade-in">
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -43,10 +55,10 @@ export default function MatchStatsModal({
             </div>
             <div>
               <h2 className="text-base font-black text-amber-300 font-mono tracking-wide flex items-center gap-2">
-                📊 対戦部屋・リアルタイム全集計
+                📊 セッション全集計
               </h2>
               <p className="text-[10px] text-slate-400 font-sans">
-                ルーム開設からの通算ポイント・セット推移・ゲーム全対戦記録
+                入室してから今この試合までの全対戦記録・通算ポイント
               </p>
             </div>
           </div>
@@ -66,51 +78,48 @@ export default function MatchStatsModal({
           <div>
             <div className="flex items-center justify-between mb-2.5">
               <span className="text-xs font-black text-amber-400 uppercase tracking-wider flex items-center gap-1.5 font-mono">
-                <Trophy className="w-4 h-4 text-amber-400" /> 総合通算ランキング (RANKING)
+                <Trophy className="w-4 h-4 text-amber-400" /> 入室からの通算（全セット合計）
               </span>
               <span className="text-[10px] text-slate-400 font-mono">現在第 {currentSetIndex} セット</span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {rankedPlayers.map((player, rank) => {
+              {sessionRanking.map((row, rank) => {
                 let badgeColor = "bg-slate-800 border-slate-700 text-slate-400";
-                let rankLabel = `#${rank + 1}`;
                 if (rank === 0) {
                   badgeColor = "bg-amber-950/80 border-amber-400 text-amber-300 shadow-[0_0_15px_rgba(251,191,36,0.2)]";
-                  rankLabel = "🥇 1位";
                 } else if (rank === 1) {
                   badgeColor = "bg-slate-800/90 border-slate-400 text-slate-200";
-                  rankLabel = "🥈 2位";
                 } else if (rank === 2) {
                   badgeColor = "bg-amber-900/30 border-amber-700/60 text-amber-400/80";
-                  rankLabel = "🥉 3位";
                 }
+                const live = livePlayers.get(row.playerId);
 
                 return (
                   <div
-                    key={player.id}
+                    key={row.playerId}
                     className={`p-3 rounded-2xl border flex flex-col justify-between relative overflow-hidden ${badgeColor}`}
                   >
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-[11px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-black/40 border border-white/10 font-mono">
-                        {rankLabel}
+                        {rankLabel(rank)}
                       </span>
-                      <span className="text-[10px] text-slate-400 font-mono">{player.winCount}勝</span>
+                      <span className="text-[10px] text-slate-400 font-mono">{row.wins}勝</span>
                     </div>
 
                     <div className="my-1">
-                      <div className="text-sm font-black truncate">{player.name}</div>
+                      <div className="text-sm font-black truncate">{row.name}</div>
                       <div className="text-xl font-black font-mono mt-0.5 flex items-baseline gap-1">
-                        <span className={player.totalMatchPoints >= 0 ? "text-emerald-400" : "text-rose-400"}>
-                          {player.totalMatchPoints >= 0 ? `+${player.totalMatchPoints}` : player.totalMatchPoints}
+                        <span className={row.points >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                          {row.points >= 0 ? `+${row.points}` : row.points}
                         </span>
                         <span className="text-[10px] text-slate-400 font-normal">pt</span>
                       </div>
                     </div>
 
                     <div className="text-[9px] text-slate-400 flex justify-between pt-1.5 border-t border-white/10 font-mono">
-                      <span>最終出目: {player.currentScore ?? '---'}</span>
-                      <span>残りHP: {player.points}pt</span>
+                      <span>最終出目: {live?.currentScore ?? '---'}</span>
+                      <span>残りHP: {live?.points ?? 0}pt</span>
                     </div>
                   </div>
                 );
@@ -128,6 +137,44 @@ export default function MatchStatsModal({
               <li><strong>2位・3位の減算pt</strong>: 1位とのスコア差の比率で1位の獲得ptを分配マイナス（合計が常にゼロ）</li>
               <li><strong>ゾロ目特別ボーナス</strong>: 5pt全消費＆ゾロ目勝利で<span className="text-yellow-300 font-bold">1位+3000pt固定</span>（他2人は各自-1500pt）</li>
             </ul>
+          </div>
+
+          {/* Per-set breakdown */}
+          <div>
+            <span className="text-xs font-black text-amber-400 uppercase tracking-wider flex items-center gap-1.5 font-mono mb-2">
+              <Award className="w-4 h-4 text-amber-400" /> セット別の集計 ({setAggregates.length} セット)
+            </span>
+
+            {setAggregates.length === 0 ? (
+              <div className="p-4 text-center text-xs text-slate-500 bg-slate-950/40 rounded-2xl border border-slate-800">
+                まだセットの記録はありません
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-56 overflow-y-auto custom-scrollbar pr-1">
+                {setAggregates.map((agg) => (
+                  <div key={agg.setIndex} className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl text-xs font-mono">
+                    <div className="flex justify-between items-center text-[10px] text-slate-400 border-b border-slate-900 pb-1 mb-1.5">
+                      <span>第 {agg.setIndex} セット</span>
+                      <span>{agg.gameCount} ゲーム</span>
+                    </div>
+                    <div className="space-y-1">
+                      {rankSet(agg).map((row, rank) => (
+                        <div key={row.playerId} className="flex justify-between items-center">
+                          <span className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-slate-500 w-10">{rankLabel(rank)}</span>
+                            <span className="font-bold">{row.name}</span>
+                            <span className="text-[9px] text-slate-500">{row.wins}勝</span>
+                          </span>
+                          <strong className={row.points >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                            {row.points >= 0 ? `+${row.points}` : row.points}pt
+                          </strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Detailed Game History Log */}
@@ -202,24 +249,25 @@ export default function MatchStatsModal({
             onClick={onClose}
             className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl transition cursor-pointer"
           >
-            閉じる
+            対戦に戻る
           </button>
 
           {onDisbandRoom && (
             <button
               onClick={() => {
-                if (confirm('本当にルームを解散し、対戦成績をリセットしますか？')) {
+                if (confirm('セッションを終了します。ここまでの集計は消えます。よろしいですか？')) {
                   onDisbandRoom();
                   onClose();
                 }
               }}
               className="px-4 py-2 bg-rose-950/80 hover:bg-rose-900 border border-rose-500/50 text-rose-300 text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5"
             >
-              <RefreshCw className="w-3.5 h-3.5" /> ルーム解散・全集計リセット
+              <RefreshCw className="w-3.5 h-3.5" /> セッションを終了する
             </button>
           )}
         </div>
       </motion.div>
-    </div>
+    </div>,
+    document.body,
   );
 }

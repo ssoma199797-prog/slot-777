@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Trophy, Play, BarChart3, Users, Sparkles, CheckCircle } from 'lucide-react';
 import { MatchPlayer, MatchGameRecord } from '../types';
@@ -28,7 +29,10 @@ export default function RoundSummaryModal({
 
   const winnerResult = lastRoundRecord.results.find((r) => r.isWinner);
 
-  return (
+  // Rendered into <body>: these panels sit inside the cabinet, whose animated
+  // ancestors create stacking contexts that trapped a fixed overlay behind the
+  // game screen no matter how high its z-index was.
+  return createPortal(
     <AnimatePresence>
       <div className="fixed inset-0 z-[10005] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md">
         <motion.div
@@ -138,7 +142,9 @@ export default function RoundSummaryModal({
           </div>
 
           {/* Action Buttons */}
-          <div className="flex flex-col sm:flex-row gap-2 mt-1">
+          {/* Only "next round" here: the session tally and the exit live on the
+              set summary, so a round break cannot end everyone's session. */}
+          <div className="flex flex-col gap-2 mt-1">
             <button
               onClick={onNextRound}
               className="flex-1 py-3 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 text-slate-950 font-black text-xs sm:text-sm rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition cursor-pointer flex items-center justify-center gap-2"
@@ -146,16 +152,10 @@ export default function RoundSummaryModal({
               <Play className="w-4 h-4 fill-slate-950" />
               {currentRoundInSet < players.length ? `次の周 (${currentRoundInSet + 1}周目 / 全${players.length}周) へ進む` : 'セット結果ポップアップを表示'}
             </button>
-
-            <button
-              onClick={onDisbandRoom}
-              className="py-3 px-4 bg-rose-950/80 border border-rose-500/40 text-rose-300 hover:bg-rose-900 font-bold text-xs rounded-xl transition cursor-pointer flex items-center justify-center gap-1"
-            >
-              ルーム終了 (全集計)
-            </button>
           </div>
         </motion.div>
       </div>
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }

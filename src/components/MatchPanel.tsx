@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { MatchPlayer, SkillSelection, MatchGameRecord, MatchSetRecord } from '../types';
 import { Trophy, Zap, CheckCircle2, RotateCcw, User, Play, BarChart3, Sparkles, Layers, Edit3, Smartphone, Smile, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import MatchStatsModal from './MatchStatsModal';
 import SlotLever from './SlotLever';
 
 interface MatchPanelProps {
@@ -40,6 +39,10 @@ interface MatchPanelProps {
   onSendStamp?: (stampText: string, senderName: string) => void;
   onTriggerNormalSpin: () => void;
   onTriggerInstantSpin: () => void;
+  onShowStats?: () => void;
+  canLaunchGame?: boolean;
+  lobbyReadyCount?: number;
+  lobbyTotalCount?: number;
   section?: 'upper' | 'lower' | 'full';
   roomId?: string;
   setRoomId?: (id: string) => void;
@@ -95,6 +98,10 @@ export default function MatchPanel({
   onSendStamp,
   onTriggerNormalSpin,
   onTriggerInstantSpin,
+  onShowStats,
+  canLaunchGame = true,
+  lobbyReadyCount = 0,
+  lobbyTotalCount = 0,
   section = 'full',
   roomId = 'ROOM-777',
   setRoomId,
@@ -107,7 +114,6 @@ export default function MatchPanel({
   userNameInput: propsUserNameInput,
   setUserNameInput: propsSetUserNameInput,
 }: MatchPanelProps) {
-  const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
   const [showRuleQuickSheet, setShowRuleQuickSheet] = useState(false);
   const [copiedRoomId, setCopiedRoomId] = useState(false);
   const [localJoinMode, setLocalJoinMode] = useState<'create' | 'join'>('create');
@@ -258,7 +264,7 @@ export default function MatchPanel({
               </button>
 
               <button
-                onClick={() => setIsStatsModalOpen(true)}
+                onClick={onShowStats}
                 className="text-[9px] font-bold text-amber-300 hover:text-amber-200 flex items-center gap-1 bg-amber-950/80 border border-amber-500/40 px-1.5 py-0.5 rounded-lg transition cursor-pointer hover:bg-amber-900/80 shadow-sm"
                 title="全集計表示"
               >
@@ -267,9 +273,11 @@ export default function MatchPanel({
 
               {matchState !== 'setup' && (
                 <button
-                  onClick={onDisbandRoom}
+                  // Ending the session goes through the tally: you see every game
+                  // played since joining, and only then decide to close it.
+                  onClick={onShowStats}
                   className="text-[9px] font-bold text-rose-300 hover:text-rose-100 flex items-center gap-1 bg-rose-950/80 border border-rose-500/40 px-1.5 py-0.5 rounded-lg transition cursor-pointer hover:bg-rose-900 shadow-sm"
-                  title="ルーム終了・全結果集計"
+                  title="集計を見てセッションを終了する"
                 >
                   <RotateCcw className="w-3 h-3 text-rose-400" /> 終了
                 </button>
@@ -424,6 +432,7 @@ export default function MatchPanel({
                           )}
                         </div>
                         <span className="text-[10px] text-emerald-400 font-mono">✓ 待機中</span>
+
                       </div>
                     );
                   })}
@@ -434,9 +443,17 @@ export default function MatchPanel({
               <div className="space-y-1.5">
                 <button
                   onClick={onLaunchGame || onStartMatch}
-                  className="w-full py-3.5 bg-gradient-to-r from-emerald-500 via-amber-500 to-orange-500 text-slate-950 font-black text-xs rounded-xl shadow-xl hover:brightness-110 active:scale-95 transition cursor-pointer flex items-center justify-center gap-1.5"
+                  disabled={!canLaunchGame}
+                  className={`w-full py-3.5 font-black text-xs rounded-xl shadow-xl transition flex items-center justify-center gap-1.5 ${
+                    canLaunchGame
+                      ? 'bg-gradient-to-r from-emerald-500 via-amber-500 to-orange-500 text-slate-950 hover:brightness-110 active:scale-95 cursor-pointer'
+                      : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                  }`}
                 >
-                  <Play className="w-4 h-4 fill-slate-950" /> 全員揃ったので対戦開始！
+                  <Play className={`w-4 h-4 ${canLaunchGame ? 'fill-slate-950' : 'fill-slate-500'}`} />
+                  {canLaunchGame
+                    ? '全員揃ったので対戦開始！'
+                    : `待機室に全員が入るまで待っています (${lobbyReadyCount}/${lobbyTotalCount})`}
                 </button>
                 <button
                   onClick={onDisbandRoom}
@@ -668,16 +685,6 @@ export default function MatchPanel({
         </div>
       )}
 
-      {/* Stats Modal */}
-      <MatchStatsModal
-        isOpen={isStatsModalOpen}
-        onClose={() => setIsStatsModalOpen(false)}
-        players={players}
-        gameHistory={gameHistory || []}
-        setHistory={setHistory || []}
-        currentSetIndex={currentSetIndex}
-        onDisbandRoom={onDisbandRoom}
-      />
     </div>
   );
 }
