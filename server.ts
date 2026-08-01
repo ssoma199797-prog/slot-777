@@ -24,7 +24,11 @@ const MAX_PLAYERS = 8;
 const MAX_NAME_LEN = 20;
 const MAX_ROOM_ID_LEN = 32;
 const RATE_LIMIT_WINDOW_MS = 10_000;
-const RATE_LIMIT_MAX_WRITES = 120;            // per IP per window
+// Everyone on one home Wi-Fi shares a public IP, so a per-IP cap alone punishes a
+// normal 3-player match. The per-device cap is what actually paces a client; the
+// per-IP cap stays as abuse protection and is sized for a full room behind one NAT.
+const RATE_LIMIT_MAX_PER_DEVICE = 60;
+const RATE_LIMIT_MAX_PER_IP = 600;
 // How long a player's slot survives without a write from that device. Connected
 // clients re-announce every SLOT_KEEPALIVE_MS (src/App.tsx), so this only
 // expires seats whose device has actually gone away.
@@ -350,16 +354,26 @@ async function startServer() {
     for (const [ip, rec] of writeHits) if (rec.resetAt < now) writeHits.delete(ip);
   }, RATE_LIMIT_WINDOW_MS).unref?.();
 
-  const rateLimit = (req: Request, res: Response, next: NextFunction) => {
-    const ip = req.ip || "unknown";
-    const now = Date.now();
-    const rec = writeHits.get(ip);
+  /** Counts a hit against `key`, returning false once it exceeds `limit`. */
+  const withinLimit = (key: string, limit: number, now: number): boolean => {
+    const rec = writeHits.get(key);
     if (!rec || rec.resetAt < now) {
-      writeHits.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
-      return next();
+      writeHits.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+      return true;
     }
     rec.count += 1;
-    if (rec.count > RATE_LIMIT_MAX_WRITES) {
+    return rec.count <= limit;
+  };
+
+  const rateLimit = (req: Request, res: Response, next: NextFunction) => {
+    const now = Date.now();
+    const ip = req.ip || "unknown";
+    const deviceId = cleanString(req.body?.deviceRegistration?.deviceId, 40);
+    const deviceOk = deviceId ? withinLimit(`dev:${deviceId}`, RATE_LIMIT_MAX_PER_DEVICE, now) : true;
+    const ipOk = withinLimit(`ip:${ip}`, RATE_LIMIT_MAX_PER_IP, now);
+    if (!deviceOk || !ipOk) {
+      // Retry-After lets the client back off instead of silently losing the write.
+      res.setHeader("Retry-After", "1");
       return res.status(429).json({ success: false, message: "リクエストが多すぎます" });
     }
     next();

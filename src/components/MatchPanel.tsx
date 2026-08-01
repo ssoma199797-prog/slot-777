@@ -41,6 +41,7 @@ interface MatchPanelProps {
   onTriggerInstantSpin: () => void;
   onShowStats?: () => void;
   onResetSession?: () => void;
+  joinError?: string | null;
   deviceId?: string;
   connectedDeviceCount?: number;
   sessionInProgress?: boolean;
@@ -105,6 +106,7 @@ export default function MatchPanel({
   onTriggerInstantSpin,
   onShowStats,
   onResetSession,
+  joinError = null,
   deviceId = '',
   connectedDeviceCount = 0,
   sessionInProgress = false,
@@ -353,6 +355,12 @@ export default function MatchPanel({
                     placeholder="例: プレイヤー1"
                   />
                 </div>
+
+                {joinError && (
+                  <div className="bg-rose-950/80 border border-rose-500/60 rounded-xl px-3 py-2 text-[11px] text-rose-200 font-bold">
+                    ⚠️ {joinError}
+                  </div>
+                )}
 
                 {/* What the room currently holds, so the choice below is informed */}
                 <div className="text-[10px] font-mono px-1 text-slate-400">

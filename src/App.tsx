@@ -20,6 +20,31 @@ const SLOT_KEEPALIVE_MS = 60_000;
 // room id every write would be rejected for.
 const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 
+/**
+ * POSTs a room write, retrying once if the server asks us to slow down.
+ *
+ * A 429 is a normal response, not a network error, so the old fire-and-forget
+ * `fetch(...).catch(() => {})` swallowed it silently — the write was simply lost
+ * and the device carried on believing it had been applied.
+ */
+async function postRoomWrite(body: unknown, attempt = 0): Promise<Response | null> {
+  try {
+    const res = await fetch('/api/sync/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 429 && attempt < 2) {
+      const wait = 400 * (attempt + 1) + Math.random() * 200;
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      return postRoomWrite(body, attempt + 1);
+    }
+    return res;
+  } catch {
+    return null;
+  }
+}
+
 /** The name a registration is sent under, kept in one place so it can be compared. */
 function normaliseName(raw: string): string {
   return raw.trim() || 'プレイヤー';
@@ -245,6 +270,8 @@ export default function App() {
   // button — otherwise merely opening the 対戦 tab registers you into the default
   // room, and every device shows the same lobby as player 1.
   const [hasJoinedRoom, setHasJoinedRoom] = useState<boolean>(false);
+  // Shown on the entry screen when joining did not actually take.
+  const [joinError, setJoinError] = useState<string | null>(null);
   // Lets a handler post to the room it is joining right now, before the state
   // update that names it has been rendered.
   const roomIdRef = useRef<string>(roomId);
@@ -337,20 +364,16 @@ export default function App() {
   const syncRoomStateToServer = useCallback((roomDataUpdates: any, broadcastEvent?: any) => {
     const targetRoomId = roomIdRef.current;
     if (!targetRoomId) return;
-    fetch('/api/sync/state', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        roomId: targetRoomId,
-        roomData: roomDataUpdates,
-        broadcastEvent,
-        deviceRegistration: {
-          deviceId,
-          playerName: recordSentName(userNameInput),
-          inLobby: matchStateRef.current === 'lobby',
-        },
-      }),
-    }).catch(() => {});
+    postRoomWrite({
+      roomId: targetRoomId,
+      roomData: roomDataUpdates,
+      broadcastEvent,
+      deviceRegistration: {
+        deviceId,
+        playerName: recordSentName(userNameInput),
+        inLobby: matchStateRef.current === 'lobby',
+      },
+    });
 
     // Fallback broadcast channel for same-tab
     try {
@@ -373,6 +396,7 @@ export default function App() {
       lastAppliedBonusRef.current = data.skillBonus || 0;
       currentSpinIdRef.current = Number(data.spinId) || 0;
       spinStartedAtRef.current = Date.now();
+      spinIsMineRef.current = false;
       setSpinToken((n) => n + 1);
       if (spinResultTimerRef.current) {
         clearTimeout(spinResultTimerRef.current);
@@ -433,6 +457,8 @@ export default function App() {
   // Bumped once per spin. SlotReels resets everything it carries between spins
   // when this changes, so a spin that ended badly cannot leak into the next one.
   const [spinToken, setSpinToken] = useState<number>(0);
+  // Whether the spin on screen was started by this device.
+  const spinIsMineRef = useRef<boolean>(false);
   // Spin currently on screen, and the pending "force this result" timer.
   const currentSpinIdRef = useRef<number>(0);
   const spinStartedAtRef = useRef<number>(0);
@@ -491,8 +517,12 @@ export default function App() {
     // flicker mid-spin. Bounded by time as well: if a spin never resolves (a lost
     // message, a player who walked away) this device must not stop accepting
     // state forever.
+    // Only the device that started the spin holds room updates back — it is the
+    // one whose own numbers would be overwritten mid-spin. A spectator is just
+    // watching, so it always takes the latest state; holding it back there meant
+    // the next player's result never landed if they spun promptly.
     const spinIsFresh = Date.now() - spinStartedAtRef.current < SPIN_HOLD_MAX_MS;
-    const isSpinningNow = spinIsFresh && (
+    const isSpinningNow = spinIsFresh && spinIsMineRef.current && (
       gameStateRef.current === 'spinning' ||
       gameStateRef.current === 'stopping_1' ||
       gameStateRef.current === 'stopping_2' ||
@@ -826,18 +856,14 @@ export default function App() {
 
     const sendKeepalive = () => {
       if (activeViewRef.current !== 'match') return;
-      fetch('/api/sync/state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomId,
-          deviceRegistration: {
-            deviceId,
-            playerName: recordSentName(userNameInputRef.current),
-            inLobby: matchStateRef.current === 'lobby',
-          },
-        }),
-      }).catch(() => {});
+      postRoomWrite({
+        roomId,
+        deviceRegistration: {
+          deviceId,
+          playerName: recordSentName(userNameInputRef.current),
+          inLobby: matchStateRef.current === 'lobby',
+        },
+      });
     };
 
     sendKeepalive();
@@ -987,38 +1013,46 @@ export default function App() {
     // The ref has to lead the state so the sync calls below reach `targetRoom`.
     roomIdRef.current = targetRoom;
 
-    let currentNames: string[] = [];
     let assignedSlot = 1;
     let serverMatchState: string | null = null;
-    let devices: Record<string, { slot: number; playerName: string }> | null = null;
+    let registered = false;
 
-    try {
-      const res = await fetch('/api/sync/state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomId: targetRoom,
-          deviceRegistration: {
-            deviceId,
-            playerName: recordSentName(userNameInput),
-            inLobby: true,
-          },
-        }),
-      });
-      const data = await res.json();
-      if (data.success && data.roomData) {
-        serverMatchState = data.roomData.matchState || null;
-        if (Array.isArray(data.roomData.playerNames)) {
-          // Do NOT compact: index i corresponds to slot i+1.
-          currentNames = [...data.roomData.playerNames];
+    setJoinError(null);
+    const res = await postRoomWrite({
+      roomId: targetRoom,
+      deviceRegistration: {
+        deviceId,
+        playerName: recordSentName(userNameInput),
+        inLobby: true,
+      },
+    });
+
+    if (res && res.ok) {
+      try {
+        const data = await res.json();
+        if (data.success && data.roomData) {
+          serverMatchState = data.roomData.matchState || null;
+          const devices = data.roomData.connectedDevices;
+          // Only a seat the server actually handed back counts as joined.
+          if (devices && devices[deviceId]) {
+            assignedSlot = devices[deviceId].slot;
+            registered = true;
+          }
         }
-        if (data.roomData.connectedDevices) {
-          devices = data.roomData.connectedDevices;
-          if (devices[deviceId]) assignedSlot = devices[deviceId].slot;
-        }
+      } catch {
+        // fall through to the failure path
       }
-    } catch {
-      // ignore
+    }
+
+    if (!registered) {
+      // Carrying on here is what produced "everyone is player 1": the device was
+      // never in the room but behaved as though it were.
+      setJoinError(
+        res && res.status === 429
+          ? '混み合っています。数秒おいてもう一度お試しください。'
+          : '入室できませんでした。通信を確認してもう一度お試しください。'
+      );
+      return;
     }
 
     // The roster is derived from devices that have actually joined, so an empty
@@ -1035,10 +1069,16 @@ export default function App() {
     const matchAlreadyRunning =
       serverMatchState === 'playing' || serverMatchState === 'set_summary' || serverMatchState === 'game_over';
 
+    // The ref has to lead the state here too: `syncRoomStateToServer` reads it to
+    // report whether this device is sitting in the lobby, and reading the old
+    // value wrote `inLobby: false` right after joining — which is why the lobby
+    // could insist someone was missing until the page was reloaded.
     if (matchAlreadyRunning) {
+      matchStateRef.current = serverMatchState as 'playing' | 'set_summary' | 'game_over';
       setMatchState(serverMatchState as 'playing' | 'set_summary' | 'game_over');
       syncRoomStateToServer({ roomId: targetRoom });
     } else {
+      matchStateRef.current = 'lobby';
       setMatchState('lobby');
       syncRoomStateToServer({ roomId: targetRoom, matchState: 'lobby' });
     }
@@ -1541,6 +1581,7 @@ export default function App() {
       const spinId = Date.now();
       currentSpinIdRef.current = spinId;
       spinStartedAtRef.current = Date.now();
+      spinIsMineRef.current = true;
       setSpinToken((n) => n + 1);
       setRemoteStoppedReels([false, false, false]);
       const spinData = {
@@ -1655,6 +1696,7 @@ export default function App() {
       const spinId = Date.now();
       currentSpinIdRef.current = spinId;
       spinStartedAtRef.current = Date.now();
+      spinIsMineRef.current = true;
       setSpinToken((n) => n + 1);
       setRemoteStoppedReels([true, true, true]);
       const spinData = {
@@ -2380,6 +2422,7 @@ export default function App() {
                           onTriggerInstantSpin={triggerInstantSpin}
                           onShowStats={() => setIsStatsOpen(true)}
                           onResetSession={handleResetSession}
+                          joinError={joinError}
                           deviceId={deviceId}
                           connectedDeviceCount={Object.keys(connectedDevices).length}
                           sessionInProgress={sessionInProgress}
@@ -2528,6 +2571,7 @@ export default function App() {
                           onTriggerInstantSpin={triggerInstantSpin}
                           onShowStats={() => setIsStatsOpen(true)}
                           onResetSession={handleResetSession}
+                          joinError={joinError}
                           deviceId={deviceId}
                           connectedDeviceCount={Object.keys(connectedDevices).length}
                           sessionInProgress={sessionInProgress}
@@ -2711,6 +2755,7 @@ export default function App() {
                           onTriggerInstantSpin={triggerInstantSpin}
                           onShowStats={() => setIsStatsOpen(true)}
                           onResetSession={handleResetSession}
+                          joinError={joinError}
                           deviceId={deviceId}
                           connectedDeviceCount={Object.keys(connectedDevices).length}
                           sessionInProgress={sessionInProgress}
