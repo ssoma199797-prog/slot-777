@@ -411,11 +411,18 @@ export default function SlotReels({
       {/* 3 Reels Stage */}
       <div className="grid grid-cols-3 gap-2.5 p-4 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 border-4 border-amber-500/40 rounded-3xl shadow-[0_12px_30px_rgba(0,0,0,0.8),inset_0_4px_12px_rgba(0,0,0,0.9)] max-w-sm w-full mx-auto relative decoration-clone">
         {/* Persistent skill badge — small, out of the way, left of the reels */}
-        {skillBonus > 0 && (
-          <div className="absolute -top-3.5 left-1 z-30 px-2 py-0.5 rounded-lg border border-indigo-400/70 bg-indigo-950/95 text-indigo-100 font-black text-[10px] shadow-lg flex items-center gap-1">
-            <span className="text-indigo-300">SKILL</span>
-            <span className="text-amber-300">−{skillBonus}</span>
-            <span className="text-[7.5px] text-indigo-300/80">適用中</span>
+        {skillBonus !== 0 && (
+          <div className={`absolute -top-3.5 left-1 z-30 px-2 py-0.5 rounded-lg border font-black text-[10px] shadow-lg flex items-center gap-1 ${
+            skillBonus > 0
+              ? 'border-indigo-400/70 bg-indigo-950/95 text-indigo-100'
+              : 'border-rose-400/70 bg-rose-950/95 text-rose-100'
+          }`}>
+            <span className={skillBonus > 0 ? 'text-indigo-300' : 'text-rose-300'}>SKILL</span>
+            {/* A negative bonus means the score goes up — the ±40 gamble lost. */}
+            <span className={skillBonus > 0 ? 'text-amber-300' : 'text-rose-300'}>
+              {skillBonus > 0 ? `−${skillBonus}` : `+${-skillBonus}`}
+            </span>
+            <span className="text-[7.5px] opacity-80">適用中</span>
           </div>
         )}
 

@@ -15,7 +15,7 @@ export interface CutinEffect {
   animationStyle: 'pulse' | 'flash' | 'shake' | 'glitch' | 'lightning';
 }
 
-export type SlotState = 'idle' | 'spinning' | 'stopping_1' | 'stopping_2' | 'completed' | 'rewrite_pending';
+export type SlotState = 'idle' | 'spinning' | 'stopping_1' | 'stopping_2' | 'completed' | 'rewrite_pending' | 'reroll_pending';
 
 export type RewriteTriggerType = 'success' | 'failure' | 'dummy_99_success' | 'dummy_99_failure' | 'none';
 
@@ -53,6 +53,8 @@ export interface MatchPlayer {
     minus5Active: boolean; // ターン終了まで-5が有効か
   };
   spinCount: number;
+  /** スキル⑤をこのターンで使ったか（ターン中1回まで）。 */
+  reverseUsedThisTurn?: boolean;
   history: number[];
   totalMatchPoints: number; // 累計対戦ポイント
   winCount: number;
@@ -63,6 +65,12 @@ export interface SkillSelection {
   minus20Count: number; // 0, 1, or 2 (スキル①: -20を1~2回)
   minus40Selected: boolean; // true/false (スキル②: -40)
   minus5Selected: boolean; // true/false (スキル③: ターン終了まで-5)
+  /** スキル④: 次回−50/+100（50%ずつ）&その値で数値確定。残り2pt以下でのみ選べる。 */
+  gambleSelected: boolean;
+  /** スキル⑤: 出目の強さを逆にする（0pt・ターン中1回・他と併用不可）。 */
+  reverseSelected: boolean;
+  /** スキル⑥: 停止後にリール1本を選んで引き直す（2pt）。 */
+  rerollSelected: boolean;
 }
 
 export interface MatchGameRecord {

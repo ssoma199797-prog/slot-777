@@ -188,7 +188,7 @@ export default function MatchPanel({
     const minus5Cost = prev.minus5Selected ? 1 : 0;
     if (nextCount > 0 && activePlayer.points < nextCount * 1 + minus5Cost + 1) nextCount = 0;
 
-    const next = { ...prev, minus20Count: nextCount, minus40Selected: false };
+    const next = { ...prev, minus20Count: nextCount, minus40Selected: false, gambleSelected: false, reverseSelected: false, rerollSelected: false };
     setSkillSelection(next);
     announce(next, nextCount > 0 ? '−20 セット' : null);
   };
@@ -201,7 +201,7 @@ export default function MatchPanel({
     const minus5Cost = prev.minus5Selected ? 1 : 0;
     if (willSelect && activePlayer.points < (willSelect ? 3 : 0) + minus5Cost + 1) return;
 
-    const next = { ...prev, minus40Selected: willSelect, minus20Count: 0 };
+    const next = { ...prev, minus40Selected: willSelect, minus20Count: 0, gambleSelected: false, reverseSelected: false, rerollSelected: false };
     setSkillSelection(next);
     announce(next, willSelect ? '−40 セット' : null);
   };
@@ -219,6 +219,63 @@ export default function MatchPanel({
     const next = { ...prev, minus5Selected: willSelect };
     setSkillSelection(next);
     announce(next, willSelect ? 'ターン中 −5 セット' : null);
+  };
+
+  // Only offered on the last affordable action (2pt or less): the skill ends the
+  // turn on whatever it rolls, so using it with points to spare would throw the
+  // rest of the turn away.
+  const canUseGamble = () => {
+    if (!activePlayer) return false;
+    return activePlayer.points <= 2 && activePlayer.points >= 2;
+  };
+
+  const handleToggleGamble = () => {
+    if (!isMyTurn || isSpinning || matchState !== 'playing' || !activePlayer) return;
+    const prev = skillSelection;
+    const willSelect = !prev.gambleSelected;
+    if (willSelect && !canUseGamble()) return;
+    // Exclusive with the other "next spin" skills — one modifier per spin.
+    const next = willSelect
+      ? { ...prev, gambleSelected: true, minus20Count: 0, minus40Selected: false, reverseSelected: false, rerollSelected: false }
+      : { ...prev, gambleSelected: false };
+    setSkillSelection(next);
+    announce(next, willSelect ? '−50 / +100 賭け！ この結果で確定' : null);
+  };
+
+  // Free, once per turn, and cannot share a spin with another skill.
+  const canUseReverse = () => {
+    if (!activePlayer) return false;
+    return !activePlayer.reverseUsedThisTurn && activePlayer.points >= 1;
+  };
+
+  const handleToggleReverse = () => {
+    if (!isMyTurn || isSpinning || matchState !== 'playing' || !activePlayer) return;
+    const prev = skillSelection;
+    const willSelect = !prev.reverseSelected;
+    if (willSelect && !canUseReverse()) return;
+    const next: SkillSelection = willSelect
+      ? { ...prev, minus20Count: 0, minus40Selected: false, gambleSelected: false, rerollSelected: false, reverseSelected: true }
+      : { ...prev, reverseSelected: false };
+    setSkillSelection(next);
+    announce(next, willSelect ? '出目の強さを逆転！' : null);
+  };
+
+  const canAffordReroll = () => {
+    if (!activePlayer) return false;
+    const minus5Cost = skillSelection.minus5Selected ? 1 : 0;
+    return activePlayer.points >= 2 + minus5Cost + 1;
+  };
+
+  const handleToggleReroll = () => {
+    if (!isMyTurn || isSpinning || matchState !== 'playing' || !activePlayer) return;
+    const prev = skillSelection;
+    const willSelect = !prev.rerollSelected;
+    if (willSelect && !canAffordReroll()) return;
+    const next: SkillSelection = willSelect
+      ? { ...prev, rerollSelected: true, minus20Count: 0, minus40Selected: false, gambleSelected: false, reverseSelected: false }
+      : { ...prev, rerollSelected: false };
+    setSkillSelection(next);
+    announce(next, willSelect ? 'リール1本 引き直し！' : null);
   };
 
   const canAffordMinus20Step = (targetCount: number) => {
@@ -437,6 +494,7 @@ export default function MatchPanel({
                   <span>自分: <span className="text-amber-300 font-bold">{myPlayerId}P</span></span>
                   <span>端末: <span className="text-slate-300">{deviceId.replace('dev_', '')}</span></span>
                   <span>接続: <span className="text-emerald-300 font-bold">{connectedDeviceCount}台</span></span>
+                  <span>版: <span className="text-slate-300">{__BUILD_ID__}</span></span>
                 </div>
 
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-xs text-amber-200 font-bold leading-relaxed space-y-1.5">
@@ -712,6 +770,61 @@ export default function MatchPanel({
                       <div className="text-[9.5px] font-black text-emerald-300 font-mono leading-tight mt-0.5">
                         {activePlayer?.skillsActive.minus5Active ? '継続中' : '1pt'}
                       </div>
+                    </button>
+
+                    {/* SKILL 4: ±40 gamble, ends the turn */}
+                    <button
+                      onClick={handleToggleGamble}
+                      disabled={!isMyTurn || isSpinning || (!skillSelection.gambleSelected && !canUseGamble())}
+                      className={`flex flex-col items-center justify-center py-1 px-1 rounded-lg border transition-all text-center cursor-pointer ${
+                        skillSelection.gambleSelected
+                          ? 'bg-rose-950/90 border-rose-400 text-rose-200 shadow-[0_0_6px_rgba(251,113,133,0.4)] animate-pulse'
+                          : canUseGamble() && isMyTurn
+                          ? 'bg-slate-900 border-slate-800 text-slate-300 hover:border-rose-500/50 hover:bg-slate-800'
+                          : 'bg-slate-900/40 border-slate-800/50 text-slate-600 cursor-not-allowed opacity-50'
+                      }`}
+                      title="次の1回転の結果に −50 か +100 を50%ずつ適用し、その数値で確定します（残り2ptのときだけ）"
+                    >
+                      <div className="text-[8.5px] font-bold leading-tight">次回-50/+100</div>
+                      <div className="text-[9.5px] font-black text-rose-300 font-mono leading-tight mt-0.5">
+                        {canUseGamble() || skillSelection.gambleSelected ? '1pt/確定' : '残2pt'}
+                      </div>
+                    </button>
+
+                    {/* SKILL 5: reverse the strength of the roll */}
+                    <button
+                      onClick={handleToggleReverse}
+                      disabled={!isMyTurn || isSpinning || (!skillSelection.reverseSelected && !canUseReverse())}
+                      className={`flex flex-col items-center justify-center py-1 px-1 rounded-lg border transition-all text-center cursor-pointer ${
+                        skillSelection.reverseSelected
+                          ? 'bg-amber-950/90 border-amber-400 text-amber-200 shadow-[0_0_6px_rgba(251,191,36,0.4)]'
+                          : canUseReverse() && isMyTurn
+                          ? 'bg-slate-900 border-slate-800 text-slate-300 hover:border-amber-500/50 hover:bg-slate-800'
+                          : 'bg-slate-900/40 border-slate-800/50 text-slate-600 cursor-not-allowed opacity-50'
+                      }`}
+                      title="出目の強さを逆にします（500→1、499→2）。0pt・ターン中1回・他スキルと併用不可"
+                    >
+                      <div className="text-[8.5px] font-bold leading-tight">強さ逆転</div>
+                      <div className="text-[9.5px] font-black text-amber-300 font-mono leading-tight mt-0.5">
+                        {activePlayer?.reverseUsedThisTurn ? '使用済' : '0pt'}
+                      </div>
+                    </button>
+
+                    {/* SKILL 6: re-roll one reel after the spin lands */}
+                    <button
+                      onClick={handleToggleReroll}
+                      disabled={!isMyTurn || isSpinning || (!skillSelection.rerollSelected && !canAffordReroll())}
+                      className={`flex flex-col items-center justify-center py-1 px-1 rounded-lg border transition-all text-center cursor-pointer ${
+                        skillSelection.rerollSelected
+                          ? 'bg-sky-950/90 border-sky-400 text-sky-200 shadow-[0_0_6px_rgba(56,189,248,0.4)]'
+                          : canAffordReroll() && isMyTurn
+                          ? 'bg-slate-900 border-slate-800 text-slate-300 hover:border-sky-500/50 hover:bg-slate-800'
+                          : 'bg-slate-900/40 border-slate-800/50 text-slate-600 cursor-not-allowed opacity-50'
+                      }`}
+                      title="3つ止まった後、好きなリール1本を引き直します（出る数字はランダム）"
+                    >
+                      <div className="text-[8.5px] font-bold leading-tight">1本引き直し</div>
+                      <div className="text-[9.5px] font-black text-sky-300 font-mono leading-tight mt-0.5">2pt</div>
                     </button>
                   </div>
                 </div>

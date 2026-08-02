@@ -119,6 +119,7 @@ function sanitizePlayer(p: any): Record<string, unknown> | null {
     usedAll5Points: Boolean(p.usedAll5Points),
     skillsActive: { minus5Active: Boolean(p.skillsActive?.minus5Active) },
     spinCount: clampInt(p.spinCount, 0, 9999, 0),
+    reverseUsedThisTurn: Boolean(p.reverseUsedThisTurn),
     // Kept short on purpose: the roster is re-broadcast on every reel stop, and
     // a 100-entry log per player was a third of each frame for data no screen
     // reads. Phones on a weak link feel that.
@@ -139,7 +140,7 @@ function emptyRoom(roomId: string): RoomData {
     activePlayerIndex: 0,
     currentSetIndex: 1,
     currentRoundInSet: 1,
-    skillSelection: { minus20Count: 0, minus40Selected: false, minus5Selected: false },
+    skillSelection: { minus20Count: 0, minus40Selected: false, minus5Selected: false, gambleSelected: false, reverseSelected: false, rerollSelected: false },
     activeSpin: null,
     connectedDevices: {},
     updatedAt: Date.now(),
@@ -181,6 +182,9 @@ function mergeRoomData(target: RoomData, incoming: any): RoomData {
       minus20Count: clampInt((incoming.skillSelection as any).minus20Count, 0, 2, 0),
       minus40Selected: Boolean((incoming.skillSelection as any).minus40Selected),
       minus5Selected: Boolean((incoming.skillSelection as any).minus5Selected),
+      gambleSelected: Boolean((incoming.skillSelection as any).gambleSelected),
+      reverseSelected: Boolean((incoming.skillSelection as any).reverseSelected),
+      rerollSelected: Boolean((incoming.skillSelection as any).rerollSelected),
     };
   }
   // `activeSpin: null` is a meaningful value (clears the spin), so check for
@@ -199,7 +203,7 @@ function mergeRoomData(target: RoomData, incoming: any): RoomData {
           isInstant: Boolean(s.isInstant),
           // Skill subtraction the acting device will apply to this result, so
           // every screen animates to the same final number.
-          skillBonus: clampInt(s.skillBonus, 0, 999, 0),
+          skillBonus: clampInt(s.skillBonus, -999, 999, 0),
           stoppedReels: Array.isArray(s.stoppedReels)
             ? s.stoppedReels.slice(0, 3).map(Boolean)
             : [false, false, false],
@@ -251,7 +255,7 @@ function sanitizeBroadcast(ev: any): any | null {
         rewriteTrigger: cleanString(ev.rewriteTrigger, 40) || "none",
         timing: cleanString(ev.timing, 20) || "none",
         isInstant: Boolean(ev.isInstant),
-        skillBonus: clampInt(ev.skillBonus, 0, 999, 0),
+        skillBonus: clampInt(ev.skillBonus, -999, 999, 0),
         stoppedReels: Array.isArray(ev.stoppedReels) ? ev.stoppedReels.slice(0, 3).map(Boolean) : [false, false, false],
       };
     // spinId travels with every spin-scoped event so a device can tell a message
@@ -270,10 +274,20 @@ function sanitizeBroadcast(ev: any): any | null {
         ...base,
         spinId: clampInt(ev.spinId, 0, Number.MAX_SAFE_INTEGER, 0),
         finalValue: clampInt(ev.finalValue, -999, 999, 0),
-        skillBonus: clampInt(ev.skillBonus, 0, 999, 0),
+        skillBonus: clampInt(ev.skillBonus, -999, 999, 0),
       };
     case "EXECUTE_REWRITE":
       return { ...base, spinId: clampInt(ev.spinId, 0, Number.MAX_SAFE_INTEGER, 0) };
+    // Which reel was re-rolled and what it landed on. Decided once by the acting
+    // device so every screen shows the same digit.
+    case "REROLL_REEL":
+      return {
+        ...base,
+        spinId: clampInt(ev.spinId, 0, Number.MAX_SAFE_INTEGER, 0),
+        reelIdx: clampInt(ev.reelIdx, 0, 2, 0),
+        newDigit: clampInt(ev.newDigit, 0, 9, 0),
+        newValue: clampInt(ev.newValue, -999, 999, 0),
+      };
     case "SEND_STAMP":
       return { ...base, stampText: cleanString(ev.stampText, 40), senderName: cleanString(ev.senderName, MAX_NAME_LEN) };
     case "ROUND_RESULT":
@@ -288,7 +302,7 @@ function sanitizeBroadcast(ev: any): any | null {
       return {
         ...base,
         skillText: cleanString(ev.skillText, 24),
-        skillBonus: clampInt(ev.skillBonus, 0, 999, 0),
+        skillBonus: clampInt(ev.skillBonus, -999, 999, 0),
       };
     case "NEXT_ROUND":
     case "NEXT_SET":

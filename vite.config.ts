@@ -4,7 +4,13 @@ import path from 'path';
 import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
+  // Stamped into the bundle so a running client can say which build it is —
+  // an installed PWA can keep serving an old one long after a deploy.
+  const buildId = new Date().toISOString().slice(5, 16).replace(/[-T:]/g, '');
   return {
+    define: {
+      __BUILD_ID__: JSON.stringify(buildId),
+    },
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

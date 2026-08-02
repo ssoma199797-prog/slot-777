@@ -279,15 +279,22 @@ export const isZoromeVal = (val: number): boolean => {
  * Determines the final value, and selects a cut-in effect + timing based on probability rules.
  */
 export const performLottery = (
-  min: number, 
-  max: number, 
-  cutinFrequency: 'high' | 'normal' | 'low'
+  min: number,
+  max: number,
+  cutinFrequency: 'high' | 'normal' | 'low',
+  /**
+   * 「出目の強さを逆にする」: mirrors the draw inside the range, so 500 becomes 1
+   * and 499 becomes 2. Applied at the source — before the cut-in and rewrite
+   * logic — so every later stage sees the number the player will actually get.
+   */
+  invert = false
 ): LotteryResult => {
   // 1. Draw the target number (crypto-grade, bias-free within [min, max]).
   //    See STRICT_UNIFORM_DISTRIBUTION above for how the presentation layer can
   //    still nudge the final outcome.
   let realValue = secureRandomInt(min, max);
-  
+  if (invert) realValue = min + max - realValue;
+
   let rewriteTrigger: RewriteTriggerType = 'none';
   let initialValue = realValue;
   let mismatchType: MismatchType = 'none';
@@ -321,7 +328,12 @@ export const performLottery = (
   const N_over200 = validOver200.length;
 
   // Normal Mode
-  if (isZoromeVal(realValue)) {
+  // A reversed spin skips the rewrite teases: a dummy number on top of a mirrored
+  // one leaves nothing a player can read.
+  if (invert) {
+    rewriteTrigger = 'none';
+    mismatchType = 'none';
+  } else if (isZoromeVal(realValue)) {
     rewriteTrigger = 'none';
     mismatchType = 'none';
   } else if (realValue >= 400 && validUnder99.length > 0 && secureRandom() < 0.25) {

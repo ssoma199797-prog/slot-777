@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { performLottery, isZoromeVal } from './utils/effects';
+import { performLottery, isZoromeVal, secureRandom, secureRandomInt } from './utils/effects';
 import { toggleMute, isSoundEnabled, playWinFanfare, playCutinSound, playPuchunSound, playFreezeRevealSound, playButtonUnlockSound, playRewriteTriggerSound, playRewriteSuccessSound, playRewriteFailureSound, playMockTriggerSound, playMockLaughSound, playLeverOn, playWeirdLeverSound, playZoromeVictorySound, playStampSound, playConfirmScoreSound, playYourTurnSound } from './utils/audio';
 import { CutinEffect, CutinTiming, SlotState, HistoryItem, MismatchType, RewriteTriggerType, MatchPlayer, SkillSelection, MatchGameRecord, MatchSetRecord } from './types';
 import SlotLCD from './components/SlotLCD';
@@ -128,6 +128,9 @@ export default function App() {
     minus20Count: 0,
     minus40Selected: false,
     minus5Selected: false,
+    gambleSelected: false,
+    reverseSelected: false,
+    rerollSelected: false,
   });
   const [matchWinner, setMatchWinner] = useState<MatchPlayer | null>(null);
   const [isMatchDraw, setIsMatchDraw] = useState<boolean>(false);
@@ -457,6 +460,11 @@ export default function App() {
   // Bumped once per spin. SlotReels resets everything it carries between spins
   // when this changes, so a spin that ended badly cannot leak into the next one.
   const [spinToken, setSpinToken] = useState<number>(0);
+  // Set while a spin is waiting for the player to pick a reel to re-roll.
+  const rerollPendingRef = useRef<boolean>(false);
+  const handleRerollReelRef = useRef<(reelIdx: number, remote?: { newDigit: number; newValue: number }) => void>(() => {});
+  // The ±40 gamble ends the turn on the value it produces, win or lose.
+  const gambleLocksTurnRef = useRef<boolean>(false);
   // Whether the spin on screen was started by this device.
   const spinIsMineRef = useRef<boolean>(false);
   // Spin currently on screen, and the pending "force this result" timer.
@@ -647,6 +655,13 @@ export default function App() {
           !broadcastEvent.spinId || broadcastEvent.spinId === currentSpinIdRef.current;
         if (typeof reelIdx === 'number' && broadcastEvent.senderId !== myPlayerId && belongsToCurrentSpin) {
           applyReelStopRef.current(reelIdx, true);
+        }
+      } else if (broadcastEvent.type === 'REROLL_REEL' && broadcastEvent.senderId !== myPlayerId) {
+        if (!broadcastEvent.spinId || broadcastEvent.spinId === currentSpinIdRef.current) {
+          handleRerollReelRef.current(broadcastEvent.reelIdx, {
+            newDigit: broadcastEvent.newDigit,
+            newValue: broadcastEvent.newValue,
+          });
         }
       } else if (broadcastEvent.type === 'SPIN_RESULT' && broadcastEvent.senderId !== myPlayerId) {
         finishRemoteSpinRef.current(broadcastEvent);
@@ -998,8 +1013,12 @@ export default function App() {
   const currentSkillCost =
     skillSelection.minus20Count * 1 +
     (skillSelection.minus40Selected ? 3 : 0) +
-    (skillSelection.minus5Selected ? 1 : 0);
+    (skillSelection.minus5Selected ? 1 : 0) +
+    (skillSelection.gambleSelected ? 1 : 0) +
+    (skillSelection.rerollSelected ? 2 : 0);
 
+  // The gamble's own ±40 is not known until the lever is pulled, so it is not
+  // part of the previewed subtraction — only the skills with a fixed value are.
   const currentMinusBonus =
     skillSelection.minus20Count * 20 +
     (skillSelection.minus40Selected ? 40 : 0) +
@@ -1128,7 +1147,7 @@ export default function App() {
     setMatchState('playing');
     setMatchWinner(null);
     setIsMatchDraw(false);
-    setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false });
+    setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false, gambleSelected: false, reverseSelected: false, rerollSelected: false });
     resetSlotVisuals();
 
     syncRoomStateToServer({
@@ -1155,7 +1174,7 @@ export default function App() {
     setIsSetSummaryOpen(false);
     setMatchWinner(null);
     setIsMatchDraw(false);
-    setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false });
+    setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false, gambleSelected: false, reverseSelected: false, rerollSelected: false });
   };
 
   const handleDisbandRoom = (arg?: unknown) => {
@@ -1205,6 +1224,7 @@ export default function App() {
       usedAll5Points: false,
       skillsActive: { minus5Active: false },
       spinCount: 0,
+      reverseUsedThisTurn: false,
       hasConsumedPointsThisTurn: false,
     }));
     const shift = resetList.length > 0 ? (nextRound - 1) % resetList.length : 0;
@@ -1212,7 +1232,7 @@ export default function App() {
     setCurrentRoundInSet(nextRound);
     setMatchPlayers(resetList);
     setActivePlayerIndex(shift);
-    setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false });
+    setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false, gambleSelected: false, reverseSelected: false, rerollSelected: false });
     setIsRoundSummaryOpen(false);
     setMatchWinner(null);
     setIsMatchDraw(false);
@@ -1252,6 +1272,7 @@ export default function App() {
       usedAll5Points: false,
       skillsActive: { minus5Active: false },
       spinCount: 0,
+      reverseUsedThisTurn: false,
       hasConsumedPointsThisTurn: false,
     }));
 
@@ -1265,7 +1286,7 @@ export default function App() {
 
     setMatchWinner(null);
     setIsMatchDraw(false);
-    setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false });
+    setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false, gambleSelected: false, reverseSelected: false, rerollSelected: false });
     setIsSetSummaryOpen(false);
     setMatchState('playing');
     resetSlotVisuals();
@@ -1536,10 +1557,15 @@ export default function App() {
   const triggerNormalSpin = () => {
     if (gameState === 'spinning' || gameState === 'stopping_1' || gameState === 'stopping_2' || gameState === 'rewrite_pending' || isBlackout) return;
 
-    // Roll lottery first so we can sync exact target value to room
-    const result = performLottery(minLimit, maxLimit, cutinFrequency);
+    // Roll lottery first so we can sync exact target value to room.
+    // The reversal is applied at the source, so the number shown on the reels is
+    // already the converted one — as specified, nothing shows the pre-flip value.
+    const useReverse = activeView === 'match' && skillSelection.reverseSelected;
+    const result = performLottery(minLimit, maxLimit, cutinFrequency, useReverse);
 
     let appliedBonus = 0;
+    // +40 means the score goes up: the same field carries both directions.
+    let gambleOutcome = 0;
     if (activeView === 'match') {
       if (matchState !== 'playing' || !activeMatchPlayer || activeMatchPlayer.hasPassed) {
         return;
@@ -1565,6 +1591,7 @@ export default function App() {
             points: nextPoints,
             skillsActive: { ...p.skillsActive, minus5Active: nextMinus5Active },
             spinCount: p.spinCount + 1,
+            reverseUsedThisTurn: p.reverseUsedThisTurn || skillSelection.reverseSelected,
             hasConsumedPointsThisTurn: true,
           };
         }
@@ -1573,9 +1600,19 @@ export default function App() {
       setMatchPlayers(nextMatchPlayers);
 
       appliedBonus = currentMinusBonus;
+      // The coin flip is resolved once, here, by the device taking the turn — and
+      // then travels with the spin. Rolling it on each device would let the same
+      // spin land on a different number on every screen.
+      if (skillSelection.gambleSelected) {
+        // Positive subtracts from the score, negative adds to it: −50 or +100.
+        gambleOutcome = secureRandom() < 0.5 ? 50 : -100;
+        appliedBonus += gambleOutcome;
+      }
       lastAppliedBonusRef.current = appliedBonus;
+      gambleLocksTurnRef.current = skillSelection.gambleSelected;
+      rerollPendingRef.current = skillSelection.rerollSelected;
 
-      setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false });
+      setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false, gambleSelected: false, reverseSelected: false, rerollSelected: false });
       setDisplaySkillBonus(0);
 
       const spinId = Date.now();
@@ -1851,6 +1888,13 @@ export default function App() {
 
   // Callback once all reels lock in
   const handleAllStopped = () => {
+    // The re-roll is chosen after the reels have landed — that is the whole point
+    // of the skill, so it takes priority over the rewrite tease.
+    if (rerollPendingRef.current) {
+      setGameState('reroll_pending');
+      playRewriteTriggerSound();
+      return;
+    }
     // Intercept with rewrite pending state if rewrite is triggered
     if (rewriteTrigger !== 'none') {
       setGameState('rewrite_pending');
@@ -1943,6 +1987,50 @@ export default function App() {
   };
   finishRemoteSpinRef.current = finishRemoteSpin;
 
+  /**
+   * Re-rolls one reel after the spin has landed.
+   *
+   * The new digit is drawn once, by the device taking the turn, and travels with
+   * the broadcast — drawing it on each device would put a different number on
+   * every screen.
+   */
+  const handleRerollReel = (reelIdx: number, remote?: { newDigit: number; newValue: number }) => {
+    if (!remote) {
+      if (activeView === 'match' && !isMyTurnInMatch) return;
+      if (gameStateRef.current !== 'reroll_pending') return;
+    }
+
+    const current = targetValue;
+    const digits = [
+      Math.floor(Math.abs(current) / 100) % 10,
+      Math.floor(Math.abs(current) / 10) % 10,
+      Math.abs(current) % 10,
+    ];
+    const newDigit = remote ? remote.newDigit : secureRandomInt(0, 9);
+    digits[reelIdx] = newDigit;
+    const newValue = remote ? remote.newValue : digits[0] * 100 + digits[1] * 10 + digits[2];
+
+    rerollPendingRef.current = false;
+
+    if (!remote && activeView === 'match') {
+      syncRoomStateToServer(null, {
+        type: 'REROLL_REEL',
+        senderId: myPlayerId,
+        spinId: currentSpinIdRef.current,
+        reelIdx,
+        newDigit,
+        newValue,
+      });
+    }
+
+    playRewriteSuccessSound();
+    setTargetValue(newValue);
+    setRealTargetValue(newValue);
+    setRewriteTrigger('none');
+    resolveFinalValue(newValue);
+  };
+  handleRerollReelRef.current = handleRerollReel;
+
   const resolveFinalValue = (finalVal: number) => {
     setGameState('completed');
     setIsButtonLocked(false);
@@ -1995,15 +2083,20 @@ export default function App() {
     // the spin — the acting device broadcasts the bonus with the spin. Keeping it
     // inside the scoring block below left spectators parked on the pre-skill
     // number while the player saw the real one.
-    if (!isInstantRef.current && activeView === 'match' && bonusMinus > 0) {
+    if (!isInstantRef.current && activeView === 'match' && bonusMinus !== 0) {
+      const goesUp = bonusMinus < 0;
       setIsSkillEffectActive(true);
-      setSkillEffectText(`⚡ スキル減算発動中！ 【${rawVal}】`);
+      setSkillEffectText(goesUp ? `💥 まさかの加算…！ 【${rawVal}】` : `⚡ スキル減算発動中！ 【${rawVal}】`);
 
-      // ① リールが停止(rawVal) ➔ ② 700ms後に減算演出＆音でリールの数値をスキル適用後(effectiveVal)に変化！
+      // ① リールが停止(rawVal) ➔ ② 700ms後に演出＆音でリールの数値をスキル適用後(effectiveVal)に変化！
       setTimeout(() => {
-        playRewriteSuccessSound();
+        if (goesUp) playMockLaughSound();
+        else playRewriteSuccessSound();
         setTargetValue(effectiveVal);
-        setSkillEffectText(`⚡ スキル適用完了！ 【${rawVal}】 ➔ (-${bonusMinus}) ➔ 【${effectiveVal}】`);
+        const delta = goesUp ? `(+${-bonusMinus})` : `(-${bonusMinus})`;
+        setSkillEffectText(
+          `${goesUp ? '💥' : '⚡'} 【${rawVal}】 ➔ ${delta} ➔ 【${effectiveVal}】`
+        );
       }, 700);
 
       setTimeout(() => {
@@ -2017,9 +2110,14 @@ export default function App() {
     // Spectating devices replay the same reels but must NOT score: only the
     // acting device owns the roster write for its own turn.
     if (!isInstantRef.current && isMyTurnInMatch && activeView === 'match' && matchState === 'playing' && activeMatchPlayer) {
+      // 「次回±40&数値確定」 ends the turn on whatever it produced — that
+      // commitment is the whole point of the skill.
+      const lockedByGamble = gambleLocksTurnRef.current;
+      gambleLocksTurnRef.current = false;
+
       const updated = matchPlayers.map((p, idx) => {
         if (idx === activePlayerIndex) {
-          const autoPass = p.points <= 0;
+          const autoPass = p.points <= 0 || lockedByGamble;
           return {
             ...p,
             rawScore: rawVal,
@@ -2035,9 +2133,10 @@ export default function App() {
       const allDone = updated.length > 0 && updated.every((p) => p.hasPassed);
 
       if (!allDone && updated.length > 0) {
-        // Point check: if points depleted (<=0), auto pass & advance player
+        // Point check: if points depleted (<=0) or the gamble locked the turn,
+        // auto pass & advance player
         const currentPlayerObj = updated[activePlayerIndex];
-        if (currentPlayerObj && currentPlayerObj.points <= 0) {
+        if (currentPlayerObj && (currentPlayerObj.points <= 0 || lockedByGamble)) {
           nextIdx = (activePlayerIndex + 1) % updated.length;
           let guard = 0;
           while (updated[nextIdx].hasPassed && guard < updated.length) {
@@ -2606,6 +2705,43 @@ export default function App() {
                         remoteStoppedReels={activeView === 'match' ? remoteStoppedReels : undefined}
                         spinToken={spinToken}
                       />
+
+                      {/* Pick a reel to re-roll */}
+                      {gameState === 'reroll_pending' && (
+                        <motion.div
+                          initial={{ scale: 0.9, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          className="absolute inset-0 z-40 bg-slate-950/85 rounded-2xl flex flex-col justify-center items-center p-4 border-2 border-cyan-400/70 shadow-[0_0_30px_rgba(34,211,238,0.4)]"
+                        >
+                          <div className="text-[11px] font-mono font-black text-cyan-300 mb-2 tracking-widest">
+                            引き直すリールを選択
+                          </div>
+                          <div className="flex gap-2.5">
+                            {['左', '中', '右'].map((label, idx) => (
+                              <button
+                                key={label}
+                                onClick={() => handleRerollReel(idx)}
+                                disabled={!canPressRewrite}
+                                className={`w-16 h-16 rounded-2xl border-2 font-display font-black text-lg flex flex-col items-center justify-center ${
+                                  canPressRewrite
+                                    ? 'bg-gradient-to-b from-cyan-500 to-blue-700 border-cyan-200 text-white cursor-pointer active:scale-95 hover:brightness-110'
+                                    : 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'
+                                }`}
+                              >
+                                <span>{label}</span>
+                                <span className="text-[9px] font-mono opacity-80">
+                                  {Math.floor(Math.abs(targetValue) / (idx === 0 ? 100 : idx === 1 ? 10 : 1)) % 10}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                          <p className={`text-[10px] font-bold mt-2.5 text-center ${canPressRewrite ? 'text-cyan-200' : 'text-slate-400'}`}>
+                            {canPressRewrite
+                              ? '選んだ1本だけ引き直します（出る数字はランダム）'
+                              : `${activeMatchPlayer?.name ?? '手番のプレイヤー'} が選ぶのを待っています…`}
+                          </p>
+                        </motion.div>
+                      )}
 
                       {/* Rewrite PUSH button overlay */}
                       {gameState === 'rewrite_pending' && (
