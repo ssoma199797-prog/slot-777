@@ -15,7 +15,7 @@ export interface CutinEffect {
   animationStyle: 'pulse' | 'flash' | 'shake' | 'glitch' | 'lightning';
 }
 
-export type SlotState = 'idle' | 'spinning' | 'stopping_1' | 'stopping_2' | 'completed' | 'rewrite_pending' | 'reroll_pending';
+export type SlotState = 'idle' | 'spinning' | 'stopping_1' | 'stopping_2' | 'completed' | 'rewrite_pending' | 'reroll_pending' | 'gamble_pending';
 
 export type RewriteTriggerType = 'success' | 'failure' | 'dummy_99_success' | 'dummy_99_failure' | 'none';
 

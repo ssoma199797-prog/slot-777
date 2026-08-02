@@ -49,6 +49,9 @@ interface ActiveSpin {
   timing?: string;
   isInstant?: boolean;
   skillBonus?: number;
+  isReverse?: boolean;
+  isReroll?: boolean;
+  gamblePending?: boolean;
   stoppedReels?: boolean[];
   senderId?: number;
   timestamp?: number;
@@ -204,6 +207,9 @@ function mergeRoomData(target: RoomData, incoming: any): RoomData {
           // Skill subtraction the acting device will apply to this result, so
           // every screen animates to the same final number.
           skillBonus: clampInt(s.skillBonus, -999, 999, 0),
+          isReverse: Boolean(s.isReverse),
+          isReroll: Boolean(s.isReroll),
+          gamblePending: Boolean(s.gamblePending),
           stoppedReels: Array.isArray(s.stoppedReels)
             ? s.stoppedReels.slice(0, 3).map(Boolean)
             : [false, false, false],
@@ -256,6 +262,9 @@ function sanitizeBroadcast(ev: any): any | null {
         timing: cleanString(ev.timing, 20) || "none",
         isInstant: Boolean(ev.isInstant),
         skillBonus: clampInt(ev.skillBonus, -999, 999, 0),
+        isReverse: Boolean(ev.isReverse),
+        isReroll: Boolean(ev.isReroll),
+        gamblePending: Boolean(ev.gamblePending),
         stoppedReels: Array.isArray(ev.stoppedReels) ? ev.stoppedReels.slice(0, 3).map(Boolean) : [false, false, false],
       };
     // spinId travels with every spin-scoped event so a device can tell a message
@@ -280,6 +289,20 @@ function sanitizeBroadcast(ev: any): any | null {
       return { ...base, spinId: clampInt(ev.spinId, 0, Number.MAX_SAFE_INTEGER, 0) };
     // Which reel was re-rolled and what it landed on. Decided once by the acting
     // device so every screen shows the same digit.
+    // The ±100 gamble is revealed by a PUSH, and the outcome was drawn when the
+    // spin started — it is relayed so every screen reveals the same thing.
+    case "EXECUTE_GAMBLE":
+      return {
+        ...base,
+        spinId: clampInt(ev.spinId, 0, Number.MAX_SAFE_INTEGER, 0),
+        outcome: clampInt(ev.outcome, -999, 999, 0),
+      };
+    case "REROLL_START":
+      return {
+        ...base,
+        spinId: clampInt(ev.spinId, 0, Number.MAX_SAFE_INTEGER, 0),
+        reelIdx: clampInt(ev.reelIdx, 0, 2, 0),
+      };
     case "REROLL_REEL":
       return {
         ...base,
@@ -304,6 +327,9 @@ function sanitizeBroadcast(ev: any): any | null {
         skillText: cleanString(ev.skillText, 24),
         skillBonus: clampInt(ev.skillBonus, -999, 999, 0),
       };
+    // Opening the result screen is a table-wide action, not a per-device one.
+    case "SHOW_RESULT":
+      return { ...base, summary: ev.summary === "set" ? "set" : "round" };
     case "NEXT_ROUND":
     case "NEXT_SET":
     case "DISBAND":

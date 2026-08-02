@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { performLottery, isZoromeVal, secureRandom, secureRandomInt } from './utils/effects';
-import { toggleMute, isSoundEnabled, playWinFanfare, playCutinSound, playPuchunSound, playFreezeRevealSound, playButtonUnlockSound, playRewriteTriggerSound, playRewriteSuccessSound, playRewriteFailureSound, playMockTriggerSound, playMockLaughSound, playLeverOn, playWeirdLeverSound, playZoromeVictorySound, playStampSound, playConfirmScoreSound, playYourTurnSound } from './utils/audio';
+import { startSpinSound, toggleMute, isSoundEnabled, playWinFanfare, playCutinSound, playPuchunSound, playFreezeRevealSound, playButtonUnlockSound, playRewriteTriggerSound, playRewriteSuccessSound, playRewriteFailureSound, playMockTriggerSound, playMockLaughSound, playLeverOn, playWeirdLeverSound, playZoromeVictorySound, playStampSound, playConfirmScoreSound, playYourTurnSound, playHellSound } from './utils/audio';
 import { CutinEffect, CutinTiming, SlotState, HistoryItem, MismatchType, RewriteTriggerType, MatchPlayer, SkillSelection, MatchGameRecord, MatchSetRecord } from './types';
 import SlotLCD from './components/SlotLCD';
 import SlotReels from './components/SlotReels';
@@ -397,6 +397,12 @@ export default function App() {
       // Mirror the acting device's skill subtraction so the reels resolve to the
       // same number here as they do on their screen.
       lastAppliedBonusRef.current = data.skillBonus || 0;
+      spinIsReverseRef.current = !!data.isReverse;
+      // Spectators reproduce the same post-stop flow, so a re-roll or a gamble
+      // pauses every screen at the same moment instead of only the player's.
+      rerollPendingRef.current = !!data.isReroll;
+      gamblePendingRef.current = !!data.gamblePending;
+      gambleOutcomeRef.current = 0;
       currentSpinIdRef.current = Number(data.spinId) || 0;
       spinStartedAtRef.current = Date.now();
       spinIsMineRef.current = false;
@@ -442,6 +448,9 @@ export default function App() {
   const handleExecuteRewriteRef = useRef<(isAuto?: boolean, isRemote?: boolean) => void>(() => {});
   const handleSendStampRef = useRef<(text: string, sender: string, isRemote?: boolean) => void>(() => {});
   const handleDisbandRoomRef = useRef<(arg?: unknown) => void>(() => {});
+  // A finished round waits behind a button instead of opening on its own.
+  const [pendingResult, setPendingResult] = useState<'round' | 'set' | null>(null);
+  const openPendingResultRef = useRef<(kind: 'round' | 'set', isRemote?: boolean) => void>(() => {});
   // Which round / set the summary popup on screen belongs to.
   // The popups used to be dismissed only by the NEXT_ROUND / NEXT_SET message.
   // A device that missed it (backgrounded, on another tab, a dropped frame) kept
@@ -461,7 +470,15 @@ export default function App() {
   // when this changes, so a spin that ended badly cannot leak into the next one.
   const [spinToken, setSpinToken] = useState<number>(0);
   // Set while a spin is waiting for the player to pick a reel to re-roll.
+  // Whether the spin on screen is a 強さ逆転 spin, so the reveal can say so.
+  const spinIsReverseRef = useRef<boolean>(false);
   const rerollPendingRef = useRef<boolean>(false);
+  const [rerollingReel, setRerollingReel] = useState<number | null>(null);
+  const handleRerollPickRef = useRef<(reelIdx: number, isRemote?: boolean) => void>(() => {});
+  const startSpinSoundRef = useRef<() => void>(() => {});
+  const gamblePendingRef = useRef<boolean>(false);
+  const gambleOutcomeRef = useRef<number>(0);
+  const handleExecuteGambleRef = useRef<(remote?: { outcome: number }) => void>(() => {});
   const handleRerollReelRef = useRef<(reelIdx: number, remote?: { newDigit: number; newValue: number }) => void>(() => {});
   // The ±40 gamble ends the turn on the value it produces, win or lose.
   const gambleLocksTurnRef = useRef<boolean>(false);
@@ -656,6 +673,14 @@ export default function App() {
         if (typeof reelIdx === 'number' && broadcastEvent.senderId !== myPlayerId && belongsToCurrentSpin) {
           applyReelStopRef.current(reelIdx, true);
         }
+      } else if (broadcastEvent.type === 'EXECUTE_GAMBLE' && broadcastEvent.senderId !== myPlayerId) {
+        if (!broadcastEvent.spinId || broadcastEvent.spinId === currentSpinIdRef.current) {
+          handleExecuteGambleRef.current({ outcome: broadcastEvent.outcome });
+        }
+      } else if (broadcastEvent.type === 'REROLL_START' && broadcastEvent.senderId !== myPlayerId) {
+        if (!broadcastEvent.spinId || broadcastEvent.spinId === currentSpinIdRef.current) {
+          handleRerollPickRef.current(broadcastEvent.reelIdx, true);
+        }
       } else if (broadcastEvent.type === 'REROLL_REEL' && broadcastEvent.senderId !== myPlayerId) {
         if (!broadcastEvent.spinId || broadcastEvent.spinId === currentSpinIdRef.current) {
           handleRerollReelRef.current(broadcastEvent.reelIdx, {
@@ -693,20 +718,19 @@ export default function App() {
 
           summaryRoundRef.current = record.roundInSet || (roomData?.currentRoundInSet ?? 0);
           summarySetRef.current = record.setIndex || (roomData?.currentSetIndex ?? 0);
-          if (broadcastEvent.summary === 'set') {
-            setIsRoundSummaryOpen(false);
-            setIsSetSummaryOpen(true);
-          } else {
-            setIsSetSummaryOpen(false);
-            setIsRoundSummaryOpen(true);
-          }
+          setIsRoundSummaryOpen(false);
+          setIsSetSummaryOpen(false);
+          setPendingResult(broadcastEvent.summary === 'set' ? 'set' : 'round');
         }
+      } else if (broadcastEvent.type === 'SHOW_RESULT') {
+        openPendingResultRef.current(broadcastEvent.summary === 'set' ? 'set' : 'round', true);
       } else if (broadcastEvent.type === 'NEXT_ROUND' || broadcastEvent.type === 'NEXT_SET') {
         // Room state itself arrives through roomData; these events just dismiss
         // the summary popups so every device leaves the screen together, and
         // clear the cabinet so the new round does not open on the old result.
         setIsRoundSummaryOpen(false);
         setIsSetSummaryOpen(false);
+        setPendingResult(null);
         setMatchWinner(null);
         setIsMatchDraw(false);
         resetSlotVisuals();
@@ -1446,11 +1470,9 @@ export default function App() {
     const isSetEnd = currentRoundInSet >= roundsPerSet;
     summaryRoundRef.current = currentRoundInSet;
     summarySetRef.current = currentSetIndex;
-    if (isSetEnd) {
-      setIsSetSummaryOpen(true);
-    } else {
-      setIsRoundSummaryOpen(true);
-    }
+    // Do not slam the result screen over the reels the moment the last player
+    // runs out of points — let everyone look at the board and open it together.
+    setPendingResult(isSetEnd ? 'set' : 'round');
 
     // Without this, the accumulated points and the result popup would only ever
     // exist on the single device that ran the evaluation.
@@ -1476,7 +1498,28 @@ export default function App() {
     }
   };
 
-  // Two-stage confirm: the first tap arms the button, the second commits.
+  /**
+   * Opens the finished round's result on every device at once.
+   *
+   * Whoever presses it decides for the table — the others are pulled in rather
+   * than each opening the screen at a different moment.
+   */
+  const openPendingResult = (kind: 'round' | 'set', isRemote = false) => {
+    setPendingResult(null);
+    if (kind === 'set') {
+      setIsRoundSummaryOpen(false);
+      setIsSetSummaryOpen(true);
+    } else {
+      setIsSetSummaryOpen(false);
+      setIsRoundSummaryOpen(true);
+    }
+    if (!isRemote && activeViewRef.current === 'match') {
+      syncRoomStateToServer(null, { type: 'SHOW_RESULT', senderId: myPlayerId, summary: kind });
+    }
+  };
+  openPendingResultRef.current = openPendingResult;
+
+  // Two-stage confirm: the first tap arms the button, the second commits.  // Two-stage confirm: the first tap arms the button, the second commits.
   const [passConfirmPending, setPassConfirmPending] = useState<boolean>(false);
   const passConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1562,6 +1605,10 @@ export default function App() {
     // already the converted one — as specified, nothing shows the pre-flip value.
     const useReverse = activeView === 'match' && skillSelection.reverseSelected;
     const result = performLottery(minLimit, maxLimit, cutinFrequency, useReverse);
+    // The reels land on the number *before* the reversal and flip to the result
+    // afterwards, so the turn-around is something you watch happen. The cut-in was
+    // already chosen against the reversed value, so it still tells the truth.
+    const preReverseValue = useReverse ? minLimit + maxLimit - result.realValue : result.value;
 
     let appliedBonus = 0;
     // +40 means the score goes up: the same field carries both directions.
@@ -1603,14 +1650,20 @@ export default function App() {
       // The coin flip is resolved once, here, by the device taking the turn — and
       // then travels with the spin. Rolling it on each device would let the same
       // spin land on a different number on every screen.
-      if (skillSelection.gambleSelected) {
-        // Positive subtracts from the score, negative adds to it: −50 or +100.
-        gambleOutcome = secureRandom() < 0.5 ? 50 : -100;
-        appliedBonus += gambleOutcome;
+      if (useReverse) {
+        appliedBonus += preReverseValue - result.realValue;
       }
+      if (skillSelection.gambleSelected) {
+        // Drawn now, revealed on the PUSH after the reels land — so it is not
+        // folded into the bonus yet. Positive subtracts, negative adds.
+        gambleOutcome = secureRandom() < 0.5 ? 50 : -100;
+      }
+      gambleOutcomeRef.current = gambleOutcome;
       lastAppliedBonusRef.current = appliedBonus;
       gambleLocksTurnRef.current = skillSelection.gambleSelected;
       rerollPendingRef.current = skillSelection.rerollSelected;
+      spinIsReverseRef.current = useReverse;
+      gamblePendingRef.current = skillSelection.gambleSelected;
 
       setSkillSelection({ minus20Count: 0, minus40Selected: false, minus5Selected: false, gambleSelected: false, reverseSelected: false, rerollSelected: false });
       setDisplaySkillBonus(0);
@@ -1623,13 +1676,16 @@ export default function App() {
       setRemoteStoppedReels([false, false, false]);
       const spinData = {
         spinId,
-        targetValue: result.value,
-        realValue: result.realValue,
+        targetValue: preReverseValue,
+        realValue: useReverse ? preReverseValue : result.realValue,
         effect: result.effect,
         mismatchType: result.mismatchType,
         rewriteTrigger: result.rewriteTrigger,
         timing: result.timing,
         isInstant: false,
+        isReverse: useReverse,
+        isReroll: skillSelection.rerollSelected,
+        gamblePending: skillSelection.gambleSelected,
         // Travels with the spin so spectators land on the same final number
         // instead of stopping on the value before the skill was subtracted.
         skillBonus: appliedBonus,
@@ -1684,8 +1740,8 @@ export default function App() {
     }
     
     const startSpin = () => {
-      setTargetValue(result.value);
-      setRealTargetValue(result.realValue);
+      setTargetValue(preReverseValue);
+      setRealTargetValue(useReverse ? preReverseValue : result.realValue);
       setRewriteTrigger(result.rewriteTrigger);
       setMismatchType(result.mismatchType);
       setCurrentEffect(result.effect);
@@ -1890,6 +1946,11 @@ export default function App() {
   const handleAllStopped = () => {
     // The re-roll is chosen after the reels have landed — that is the whole point
     // of the skill, so it takes priority over the rewrite tease.
+    if (gamblePendingRef.current) {
+      setGameState('gamble_pending');
+      playRewriteTriggerSound();
+      return;
+    }
     if (rerollPendingRef.current) {
       setGameState('reroll_pending');
       playRewriteTriggerSound();
@@ -1988,16 +2049,77 @@ export default function App() {
   finishRemoteSpinRef.current = finishRemoteSpin;
 
   /**
+   * Reveals the −50 / +100 gamble.
+   *
+   * The outcome was drawn when the spin started; the PUSH is the reveal, and the
+   * result is relayed so every screen turns over the same card at the same time.
+   */
+  const handleExecuteGamble = (remote?: { outcome: number }) => {
+    if (!remote) {
+      if (activeView === 'match' && !isMyTurnInMatch) return;
+      if (gameStateRef.current !== 'gamble_pending') return;
+    }
+    const outcome = remote ? remote.outcome : gambleOutcomeRef.current;
+    if (!outcome) return;
+
+    gamblePendingRef.current = false;
+    gambleOutcomeRef.current = 0;
+    lastAppliedBonusRef.current += outcome;
+
+    if (!remote && activeView === 'match') {
+      syncRoomStateToServer(null, {
+        type: 'EXECUTE_GAMBLE',
+        senderId: myPlayerId,
+        spinId: currentSpinIdRef.current,
+        outcome,
+      });
+    }
+
+    // outcome > 0 subtracts from the score (good); outcome < 0 adds (disaster).
+    if (outcome > 0) {
+      playWinFanfare('under_10');
+    } else {
+      playHellSound();
+      setIsScreenShaking(true);
+      setTimeout(() => setIsScreenShaking(false), 1400);
+    }
+
+    resolveFinalValue(targetValue);
+  };
+  handleExecuteGambleRef.current = handleExecuteGamble;
+
+  /**
+   * Re-rolls one reel after the spin has landed.  /**
    * Re-rolls one reel after the spin has landed.
    *
    * The new digit is drawn once, by the device taking the turn, and travels with
    * the broadcast — drawing it on each device would put a different number on
    * every screen.
    */
+  /** Step 1: the chosen reel starts spinning again. */
+  const handleRerollPick = (reelIdx: number, isRemote = false) => {
+    if (!isRemote) {
+      if (activeView === 'match' && !isMyTurnInMatch) return;
+      if (gameStateRef.current !== 'reroll_pending') return;
+      syncRoomStateToServer(null, {
+        type: 'REROLL_START',
+        senderId: myPlayerId,
+        spinId: currentSpinIdRef.current,
+        reelIdx,
+      });
+    }
+    setRerollingReel(reelIdx);
+    setGameState('spinning');
+    gameStateRef.current = 'spinning';
+    startSpinSoundRef.current();
+  };
+  handleRerollPickRef.current = handleRerollPick;
+  startSpinSoundRef.current = startSpinSound;
+
+  /** Step 2: the player stops it, and the digit it lands on is the new one. */
   const handleRerollReel = (reelIdx: number, remote?: { newDigit: number; newValue: number }) => {
     if (!remote) {
       if (activeView === 'match' && !isMyTurnInMatch) return;
-      if (gameStateRef.current !== 'reroll_pending') return;
     }
 
     const current = targetValue;
@@ -2011,6 +2133,7 @@ export default function App() {
     const newValue = remote ? remote.newValue : digits[0] * 100 + digits[1] * 10 + digits[2];
 
     rerollPendingRef.current = false;
+    setRerollingReel(null);
 
     if (!remote && activeView === 'match') {
       syncRoomStateToServer(null, {
@@ -2085,8 +2208,15 @@ export default function App() {
     // number while the player saw the real one.
     if (!isInstantRef.current && activeView === 'match' && bonusMinus !== 0) {
       const goesUp = bonusMinus < 0;
+      const isReverse = spinIsReverseRef.current;
       setIsSkillEffectActive(true);
-      setSkillEffectText(goesUp ? `💥 まさかの加算…！ 【${rawVal}】` : `⚡ スキル減算発動中！ 【${rawVal}】`);
+      setSkillEffectText(
+        isReverse
+          ? `🔄 強さ逆転…！ 【${rawVal}】`
+          : goesUp
+          ? `💥 まさかの加算…！ 【${rawVal}】`
+          : `⚡ スキル減算発動中！ 【${rawVal}】`
+      );
 
       // ① リールが停止(rawVal) ➔ ② 700ms後に演出＆音でリールの数値をスキル適用後(effectiveVal)に変化！
       setTimeout(() => {
@@ -2095,7 +2225,9 @@ export default function App() {
         setTargetValue(effectiveVal);
         const delta = goesUp ? `(+${-bonusMinus})` : `(-${bonusMinus})`;
         setSkillEffectText(
-          `${goesUp ? '💥' : '⚡'} 【${rawVal}】 ➔ ${delta} ➔ 【${effectiveVal}】`
+          isReverse
+            ? `🔄 強さ逆転！ 【${rawVal}】 ➔ 【${effectiveVal}】`
+            : `${goesUp ? '💥' : '⚡'} 【${rawVal}】 ➔ ${delta} ➔ 【${effectiveVal}】`
         );
       }, 700);
 
@@ -2704,7 +2836,44 @@ export default function App() {
                         hasConsumedPointsThisTurn={activeMatchPlayer?.hasConsumedPointsThisTurn ?? false}
                         remoteStoppedReels={activeView === 'match' ? remoteStoppedReels : undefined}
                         spinToken={spinToken}
+                        rerollingReel={rerollingReel}
+                        onStopReroll={(idx) => handleRerollReel(idx)}
                       />
+
+                      {/* −50 / +100 reveal */}
+                      {gameState === 'gamble_pending' && (
+                        <motion.div
+                          initial={{ scale: 0.3, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          className="absolute inset-0 z-40 bg-slate-950/85 rounded-2xl flex flex-col justify-center items-center p-4 border-2 border-rose-500/70 shadow-[0_0_35px_rgba(244,63,94,0.5)]"
+                        >
+                          <div className="text-[10px] font-mono font-black text-rose-300 bg-rose-950/90 border border-rose-600/80 px-3 py-0.5 rounded-full mb-2 uppercase tracking-widest animate-pulse">
+                            −50 か +100 か
+                          </div>
+                          <motion.button
+                            onClick={() => handleExecuteGamble()}
+                            disabled={!canPressRewrite}
+                            whileHover={canPressRewrite ? { scale: 1.08 } : undefined}
+                            whileTap={canPressRewrite ? { scale: 0.92 } : undefined}
+                            className={`relative w-28 h-28 sm:w-32 sm:h-32 rounded-full border-4 text-white font-display font-black flex flex-col justify-center items-center ${
+                              canPressRewrite
+                                ? 'bg-gradient-to-b from-rose-500 via-red-700 to-slate-900 border-amber-300 shadow-[0_0_35px_rgba(244,63,94,0.85)] cursor-pointer active:brightness-110 animate-bounce'
+                                : 'bg-gradient-to-b from-slate-700 via-slate-800 to-slate-900 border-slate-600 opacity-60 cursor-not-allowed'
+                            }`}
+                            style={canPressRewrite ? { animationDuration: '0.9s' } : undefined}
+                          >
+                            <span className="text-2xl mb-0.5">🎲</span>
+                            <span className="block text-xl font-black tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]">
+                              PUSH
+                            </span>
+                          </motion.button>
+                          <p className={`text-[10px] sm:text-xs font-bold mt-2.5 text-center ${canPressRewrite ? 'text-rose-200 animate-pulse' : 'text-slate-400'}`}>
+                            {canPressRewrite
+                              ? '運命を確かめろ！ この結果で確定します'
+                              : `${activeMatchPlayer?.name ?? '手番のプレイヤー'} がPUSHするのを待っています…`}
+                          </p>
+                        </motion.div>
+                      )}
 
                       {/* Pick a reel to re-roll */}
                       {gameState === 'reroll_pending' && (
@@ -2720,7 +2889,7 @@ export default function App() {
                             {['左', '中', '右'].map((label, idx) => (
                               <button
                                 key={label}
-                                onClick={() => handleRerollReel(idx)}
+                                onClick={() => handleRerollPick(idx)}
                                 disabled={!canPressRewrite}
                                 className={`w-16 h-16 rounded-2xl border-2 font-display font-black text-lg flex flex-col items-center justify-center ${
                                   canPressRewrite
@@ -2737,7 +2906,7 @@ export default function App() {
                           </div>
                           <p className={`text-[10px] font-bold mt-2.5 text-center ${canPressRewrite ? 'text-cyan-200' : 'text-slate-400'}`}>
                             {canPressRewrite
-                              ? '選んだ1本だけ引き直します（出る数字はランダム）'
+                              ? '選ぶとそのリールが回り出します。停止ボタンで止めてください'
                               : `${activeMatchPlayer?.name ?? '手番のプレイヤー'} が選ぶのを待っています…`}
                           </p>
                         </motion.div>
@@ -2814,6 +2983,20 @@ export default function App() {
                         </motion.div>
                       )}
                     </div>
+
+                    {/* Result gate — sits outside the cabinet so it never covers the
+                        reels, and opening it pulls every device in at once. */}
+                    {pendingResult && (
+                      <motion.button
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        onClick={() => openPendingResult(pendingResult)}
+                        className="mt-3 w-full py-3 rounded-2xl bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 text-slate-950 font-black text-sm shadow-[0_0_25px_rgba(251,146,60,0.5)] border-2 border-amber-200 animate-pulse cursor-pointer relative z-20 flex items-center justify-center gap-2"
+                      >
+                        <Trophy className="w-4 h-4" />
+                        {pendingResult === 'set' ? 'セットの結果を見る' : 'この周の結果を見る'}
+                      </motion.button>
+                    )}
 
                     {/* Interactive Module 3: Control Buttons & Triggers */}
                     <div className="mt-2 relative z-10" id="cabinet-footer-controls">

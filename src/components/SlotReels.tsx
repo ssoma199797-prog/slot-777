@@ -25,6 +25,10 @@ interface SlotReelsProps {
   remoteStoppedReels?: boolean[];
   /** Changes once per spin. Anything internal that survives a spin resets on it. */
   spinToken?: number;
+  /** Index of the reel being re-rolled, or null. That reel alone spins again. */
+  rerollingReel?: number | null;
+  /** Pressed to stop the re-rolling reel. */
+  onStopReroll?: (reelIdx: number) => void;
 }
 
 // Longer strip to enable realistic physical rolling and overshoot buffer
@@ -54,6 +58,8 @@ export default function SlotReels({
   hasConsumedPointsThisTurn = false,
   remoteStoppedReels,
   spinToken = 0,
+  rerollingReel = null,
+  onStopReroll,
 }: SlotReelsProps) {
   // Parse targetValue to digits e.g. 15 -> [0, 1, 5]
   // Skills subtract with no floor, so a match score legitimately goes negative
@@ -306,6 +312,28 @@ export default function SlotReels({
       });
     }
   }, [remoteStoppedReels, isSpinning, isInstant]);
+
+  // Spin just the re-rolled reel. It reuses the same loop the main spin uses, so
+  // the motion reads identically — only one strip is moving.
+  useEffect(() => {
+    if (rerollingReel === null) return;
+    const idx = rerollingReel;
+    const control = reelControls[idx];
+    stoppingRef.current[idx] = false;
+    finishedRef.current[idx] = false;
+    setReelStates((prev) => {
+      const next = [...prev];
+      next[idx] = 'spinning';
+      return next;
+    });
+    const from = -(digits[idx] + 10) * itemHeight;
+    control
+      .start({
+        y: [from, from - 10 * itemHeight],
+        transition: { repeat: Infinity, duration: 0.14, ease: 'linear' },
+      })
+      .catch(() => {});
+  }, [rerollingReel]);
 
   // Handle stopping a specific reel
   const handleStopReel = async (reelIdx: number) => {
@@ -604,13 +632,19 @@ export default function SlotReels({
       {/* Reel Stop Button Panel (Left, Center, Right Red Buttons) */}
       <div className="flex justify-between items-center gap-2.5 w-full max-w-sm px-4 select-none" id="stop-button-panel">
         {reelStates.map((state, idx) => {
-          const isActive = (state === 'spinning' && !isInstant) || (isButtonLocked && state === 'spinning');
+          const isActive = rerollingReel !== null
+            ? rerollingReel === idx
+            : (state === 'spinning' && !isInstant) || (isButtonLocked && state === 'spinning');
           
           return (
             <button
               key={idx}
-              disabled={state !== 'spinning' || isInstant || (isMatchMode && !isMyTurn)}
-              onClick={() => handleStopReel(idx)}
+              disabled={
+                rerollingReel !== null
+                  ? rerollingReel !== idx || (isMatchMode && !isMyTurn)
+                  : state !== 'spinning' || isInstant || (isMatchMode && !isMyTurn)
+              }
+              onClick={() => (rerollingReel !== null ? onStopReroll?.(idx) : handleStopReel(idx))}
               className={`flex-1 flex flex-col items-center justify-center h-12 rounded-full font-sans font-bold text-center border-b-4 transition-all duration-75 relative stop-button-class ${
                 buttonGlows[idx] ? 'clicked-glow' : ''
               } ${

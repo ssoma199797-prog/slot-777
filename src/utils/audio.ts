@@ -815,6 +815,48 @@ export const playYourTurnSound = () => {
   });
 };
 
+// 9-d. 地獄音 (Descending dissonant drone: the +100 outcome)
+export const playHellSound = () => {
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+
+  // Two detuned saws sliding down a tritone apart — deliberately unpleasant.
+  [110, 155.6].forEach((start, i) => {
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(start, now);
+    osc.frequency.exponentialRampToValueAtTime(start / 3.2, now + 1.5);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.2, now + 0.08);
+    gain.gain.setValueAtTime(0.2, now + 1.0);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.6);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(1200, now);
+    filter.frequency.exponentialRampToValueAtTime(220, now + 1.5);
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now + i * 0.03);
+    osc.stop(now + 1.7);
+  });
+
+  // A struck-bell thud on top so the hit lands.
+  const thud = ctx.createOscillator();
+  thud.type = 'square';
+  thud.frequency.setValueAtTime(70, now);
+  thud.frequency.exponentialRampToValueAtTime(28, now + 0.6);
+  const thudGain = ctx.createGain();
+  thudGain.gain.setValueAtTime(0.28, now);
+  thudGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.7);
+  thud.connect(thudGain);
+  thudGain.connect(ctx.destination);
+  thud.start(now);
+  thud.stop(now + 0.75);
+};
+
 // 10. 3rd停止時書き換えあおり音 (Rising frequency tensional sweep)
 export const playRewriteTriggerSound = () => {
   const ctx = getAudioContext();
